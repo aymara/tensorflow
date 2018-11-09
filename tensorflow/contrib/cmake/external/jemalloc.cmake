@@ -38,6 +38,8 @@ ExternalProject_Add(jemalloc
     URL ${jemalloc_URL}
     URL_HASH ${jemalloc_HASH}
     DOWNLOAD_DIR "${DOWNLOAD_LOCATION}"
+    DOWNLOAD_COMMAND ${CMAKE_COMMAND} -E copy_directory ${CMAKE_CURRENT_SOURCE_DIR}/../../../external/jemalloc ${CMAKE_CURRENT_BINARY_DIR}/jemalloc/src/jemalloc
+    UPDATE_COMMAND ""
     BUILD_IN_SOURCE 1
     BUILD_BYPRODUCTS ${jemalloc_STATIC_LIBRARIES}
     BUILD_COMMAND ${CMAKE_COMMAND} --build . --config Release --target jemalloc

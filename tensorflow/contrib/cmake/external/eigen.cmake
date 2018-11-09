@@ -44,6 +44,7 @@ ExternalProject_Add(eigen
     PREFIX eigen
     URL ${eigen_URL}
     DOWNLOAD_DIR "${DOWNLOAD_LOCATION}"
+    DOWNLOAD_COMMAND ${CMAKE_COMMAND} -E copy_directory ${CMAKE_CURRENT_SOURCE_DIR}/../../../external/eigen ${CMAKE_CURRENT_BINARY_DIR}/eigen/src/eigen
     INSTALL_DIR "${eigen_INSTALL}"
     CMAKE_CACHE_ARGS
         -DCMAKE_BUILD_TYPE:STRING=Release

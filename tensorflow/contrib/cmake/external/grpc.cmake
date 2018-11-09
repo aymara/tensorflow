@@ -47,7 +47,9 @@ ExternalProject_Add(grpc
     DEPENDS protobuf zlib
     GIT_REPOSITORY ${GRPC_URL}
     GIT_TAG ${GRPC_TAG}
+    DOWNLOAD_COMMAND ${CMAKE_COMMAND} -E copy_directory ${CMAKE_CURRENT_SOURCE_DIR}/../../../external/grpc ${CMAKE_CURRENT_BINARY_DIR}/grpc/src/grpc
     DOWNLOAD_DIR "${DOWNLOAD_LOCATION}"
+    UPDATE_COMMAND ""
     BUILD_IN_SOURCE 1
     BUILD_BYPRODUCTS ${grpc_STATIC_LIBRARIES}
     BUILD_COMMAND ${CMAKE_COMMAND} --build . --config Release --target grpc++_unsecure

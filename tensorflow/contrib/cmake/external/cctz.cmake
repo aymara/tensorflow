@@ -14,18 +14,22 @@
 # ==============================================================================
 include (ExternalProject)
 
-set(gemmlowp_URL https://github.com/google/gemmlowp/archive/38ebac7b059e84692f53e5938f97a9943c120d98.zip)
-set(gemmlowp_HASH SHA256=b87faa7294dfcc5d678f22a59d2c01ca94ea1e2a3b488c38a95a67889ed0a658)
-set(gemmlowp_BUILD ${CMAKE_CURRENT_BINARY_DIR}/gemmlowp/src/gemmlowp)
-set(gemmlowp_INCLUDE_DIR ${CMAKE_CURRENT_BINARY_DIR}/gemmlowp/src/gemmlowp)
+set(cctz_URL https://github.com/google/cctz/archive/v2.2.zip)
+set(cctz_HASH SHA256=fde7695558c951b6c486fec3e6010c88cedba0511ae77e39ab29d2e9b04baf37)
+set(cctz_BUILD ${CMAKE_CURRENT_BINARY_DIR}/cctz/src/cctz)
+set(cctz_INCLUDE_DIR ${CMAKE_CURRENT_BINARY_DIR}/cctz/src/cctz/include)
+set(cctz_ARCHIVE_DIR ${CMAKE_CURRENT_BINARY_DIR}/external/cctz_archive)
 
-ExternalProject_Add(gemmlowp
-    PREFIX gemmlowp
-    URL ${gemmlowp_URL}
-    URL_HASH ${gemmlowp_HASH}
+ExternalProject_Add(cctz
+    PREFIX cctz
+    URL ${cctz_URL}
+    URL_HASH ${cctz_HASH}
     DOWNLOAD_DIR "${DOWNLOAD_LOCATION}"
-    DOWNLOAD_COMMAND ${CMAKE_COMMAND} -E copy_directory ${CMAKE_CURRENT_SOURCE_DIR}/../../../external/gemmlowp ${CMAKE_CURRENT_BINARY_DIR}/gemmlowp/src/gemmlowp
+    DOWNLOAD_COMMAND ${CMAKE_COMMAND} -E copy_directory ${CMAKE_CURRENT_SOURCE_DIR}/../../../external/cctz ${CMAKE_CURRENT_BINARY_DIR}/cctz/src/cctz
     UPDATE_COMMAND ""
     BUILD_IN_SOURCE 1
-    PATCH_COMMAND ${CMAKE_COMMAND} -E copy_if_different ${CMAKE_CURRENT_SOURCE_DIR}/patches/gemmlowp/CMakeLists.txt ${gemmlowp_BUILD}
-    INSTALL_COMMAND "")
+    INSTALL_COMMAND  ${CMAKE_COMMAND} -E copy_directory  ${cctz_INCLUDE_DIR}/cctz ${cctz_ARCHIVE_DIR}/cctz
+    CMAKE_CACHE_ARGS
+         -DBUILD_EXAMPLES:BOOL=OFF
+         -DBUILD_TESTING:BOOL=OFF
+)

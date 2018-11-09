@@ -57,10 +57,12 @@ ExternalProject_Add(protobuf
     DEPENDS zlib
     GIT_REPOSITORY ${PROTOBUF_URL}
     GIT_TAG ${PROTOBUF_TAG}
+    DOWNLOAD_COMMAND ${CMAKE_COMMAND} -E copy_directory ${CMAKE_CURRENT_SOURCE_DIR}/../../../external/protobuf ${CMAKE_CURRENT_BINARY_DIR}/protobuf/src/protobuf
     DOWNLOAD_DIR "${DOWNLOAD_LOCATION}"
     BUILD_IN_SOURCE 1
     BUILD_BYPRODUCTS ${PROTOBUF_PROTOC_EXECUTABLE} ${protobuf_STATIC_LIBRARIES}
     SOURCE_DIR ${CMAKE_CURRENT_BINARY_DIR}/protobuf/src/protobuf
+    UPDATE_COMMAND ""
     # SOURCE_SUBDIR cmake/ # Requires CMake 3.7, this will allow removal of CONFIGURE_COMMAND
     # CONFIGURE_COMMAND resets some settings made in CMAKE_CACHE_ARGS and the generator used
     CONFIGURE_COMMAND ${CMAKE_COMMAND} cmake/

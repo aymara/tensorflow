@@ -22,15 +22,15 @@ option(tensorflow_ENABLE_SSL_SUPPORT "Enable boringssl support" OFF)
 option(tensorflow_ENABLE_GRPC_SUPPORT "Enable gRPC support" ON)
 option(tensorflow_ENABLE_HDFS_SUPPORT "Enable HDFS support" OFF)
 option(tensorflow_ENABLE_JEMALLOC_SUPPORT "Enable jemalloc support" OFF)
-option(tensorflow_BUILD_CC_EXAMPLE "Build the C++ tutorial example" ON)
-option(tensorflow_BUILD_PYTHON_BINDINGS "Build the Python bindings" ON)
+option(tensorflow_BUILD_CC_EXAMPLE "Build the C++ tutorial example" OFF)
+option(tensorflow_BUILD_PYTHON_BINDINGS "Build the Python bindings" OFF)
 option(tensorflow_BUILD_ALL_KERNELS "Build all OpKernels" ON)
 option(tensorflow_BUILD_CONTRIB_KERNELS "Build OpKernels from tensorflow/contrib/..." ON)
 option(tensorflow_BUILD_CC_TESTS "Build cc unit tests " OFF)
 option(tensorflow_BUILD_PYTHON_TESTS "Build python unit tests " OFF)
 option(tensorflow_BUILD_MORE_PYTHON_TESTS "Build more python unit tests for contrib packages" OFF)
-option(tensorflow_BUILD_SHARED_LIB "Build TensorFlow as a shared library" OFF)
-option(tensorflow_OPTIMIZE_FOR_NATIVE_ARCH "Enable compiler optimizations for the native processor architecture (if available)" ON)
+option(tensorflow_BUILD_SHARED_LIB "Build TensorFlow as a shared library" ON)
+option(tensorflow_OPTIMIZE_FOR_NATIVE_ARCH "Enable compiler optimizations for the native processor architecture (if available)" OFF)
 option(tensorflow_ENABLE_SNAPPY_SUPPORT "Enable SNAPPY compression support" ON)
 option(tensorflow_DISABLE_EIGEN_FORCEINLINE "Disable forceinline, to speed up build on windows." OFF)
 
@@ -49,7 +49,6 @@ if(HAIKU)
 else()
 	option(tensorflow_ENABLE_POSITION_INDEPENDENT_CODE "Enable PIE support" ON)
 endif()
-
 
 if (NOT WIN32)
   # Threads: defines CMAKE_THREAD_LIBS_INIT and adds -pthread compile option
@@ -199,6 +198,8 @@ if (tensorflow_ENABLE_JEMALLOC_SUPPORT)
 endif()
 
 # External dependencies
+include(cctz)
+include(abseil_cpp)
 include(zlib)
 include(gif)
 include(png)
@@ -224,6 +225,8 @@ add_definitions(${ADD_CFLAGS})
 link_directories(${ADD_LINK_DIRECTORY})
 
 set(tensorflow_EXTERNAL_LIBRARIES
+    ${cctz_STATIC_LIBRARIES}
+    ${abseil_cpp_STATIC_LIBRARIES}
     ${gif_STATIC_LIBRARIES}
     ${png_STATIC_LIBRARIES}
     ${jpeg_STATIC_LIBRARIES}
@@ -248,6 +251,8 @@ else (systemlib_ZLIB)
 endif (systemlib_ZLIB)
 
 set(tensorflow_EXTERNAL_DEPENDENCIES
+    cctz
+    abseil_cpp
     zlib_copy_headers_to_destination
     gif_copy_headers_to_destination
     png_copy_headers_to_destination
@@ -272,6 +277,8 @@ include_directories(
     ${tensorflow_source_dir}
     ${CMAKE_CURRENT_BINARY_DIR}
     # External dependencies.
+    ${cctz_INCLUDE_DIR}
+    ${abseil_cpp_INCLUDE_DIR}
     ${zlib_INCLUDE_DIR}
     ${gif_INCLUDE_DIR}
     ${png_INCLUDE_DIR}
@@ -525,8 +532,8 @@ endif()
 # We include tf_cc_ops first, because tf_c depends on tf_cc.
 include(tf_cc_ops.cmake)
 include(tf_c.cmake)
-include(tf_grappler.cmake)
-include(tf_core_profiler.cmake)
+#include(tf_grappler.cmake)
+#include(tf_core_profiler.cmake)
 if(tensorflow_BUILD_CC_EXAMPLE)
   include(tf_tutorials.cmake)
   include(tf_label_image_example.cmake)

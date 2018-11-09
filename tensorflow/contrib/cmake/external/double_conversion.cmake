@@ -45,8 +45,11 @@ ExternalProject_Add(double_conversion
     GIT_REPOSITORY ${double_conversion_URL}
     GIT_TAG ${double_conversion_TAG}
     DOWNLOAD_DIR "${DOWNLOAD_LOCATION}"
+    DOWNLOAD_COMMAND ${CMAKE_COMMAND} -E copy_directory ${CMAKE_CURRENT_SOURCE_DIR}/../../../external/double_conversion ${CMAKE_CURRENT_BINARY_DIR}/double_conversion/src/double_conversion
+    UPDATE_COMMAND ""
     BUILD_IN_SOURCE 1
     INSTALL_COMMAND ""
+    UPDATE_COMMAND ""
     CMAKE_CACHE_ARGS
         -DCMAKE_BUILD_TYPE:STRING=Release
         -DCMAKE_VERBOSE_MAKEFILE:BOOL=OFF

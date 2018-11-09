@@ -50,6 +50,8 @@ if (WIN32)
         PATCH_COMMAND ${CMAKE_COMMAND} -E copy_if_different ${CMAKE_CURRENT_SOURCE_DIR}/patches/jpeg/CMakeLists.txt ${jpeg_BUILD}
         INSTALL_DIR ${jpeg_INSTALL}
         DOWNLOAD_DIR "${DOWNLOAD_LOCATION}"
+        DOWNLOAD_COMMAND ${CMAKE_COMMAND} -E copy_directory ${CMAKE_CURRENT_SOURCE_DIR}/../../../external/jpeg ${CMAKE_CURRENT_BINARY_DIR}/jpeg/src/jpeg
+        UPDATE_COMMAND ""
         CMAKE_CACHE_ARGS
             -DCMAKE_BUILD_TYPE:STRING=Release
             -DCMAKE_VERBOSE_MAKEFILE:BOOL=OFF
@@ -70,6 +72,8 @@ else()
         URL_HASH ${jpeg_HASH}
         INSTALL_DIR ${jpeg_INSTALL}
         DOWNLOAD_DIR "${DOWNLOAD_LOCATION}"
+        DOWNLOAD_COMMAND ${CMAKE_COMMAND} -E copy_directory ${CMAKE_CURRENT_SOURCE_DIR}/../../../external/jpeg ${CMAKE_CURRENT_BINARY_DIR}/jpeg/src/jpeg
+        UPDATE_COMMAND ""
         BUILD_COMMAND $(MAKE)
         INSTALL_COMMAND $(MAKE) install
         CONFIGURE_COMMAND

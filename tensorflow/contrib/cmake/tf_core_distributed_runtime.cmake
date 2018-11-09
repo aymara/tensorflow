@@ -38,26 +38,26 @@ add_dependencies(tf_core_distributed_runtime
 ########################################################
 # grpc_tensorflow_server executable
 ########################################################
-set(grpc_tensorflow_server_srcs
-    "${tensorflow_source_dir}/tensorflow/core/distributed_runtime/rpc/grpc_tensorflow_server.cc"
-)
+#set(grpc_tensorflow_server_srcs
+#    "${tensorflow_source_dir}/tensorflow/core/distributed_runtime/rpc/grpc_tensorflow_server.cc"
+#)
 
-add_executable(grpc_tensorflow_server
-    ${grpc_tensorflow_server_srcs}
-    $<TARGET_OBJECTS:tf_core_lib>
-    $<TARGET_OBJECTS:tf_core_cpu>
-    $<TARGET_OBJECTS:tf_core_framework>
-    $<TARGET_OBJECTS:tf_core_kernels>
-    $<TARGET_OBJECTS:tf_cc_framework>
-    $<TARGET_OBJECTS:tf_cc_ops>
-    $<TARGET_OBJECTS:tf_core_ops>
-    $<TARGET_OBJECTS:tf_core_direct_session>
-    $<TARGET_OBJECTS:tf_core_distributed_runtime>
-    $<$<BOOL:${tensorflow_ENABLE_GPU}>:$<TARGET_OBJECTS:tf_stream_executor>>
-)
+#add_executable(grpc_tensorflow_server
+#    ${grpc_tensorflow_server_srcs}
+#    $<TARGET_OBJECTS:tf_core_lib>
+#    $<TARGET_OBJECTS:tf_core_cpu>
+#    $<TARGET_OBJECTS:tf_core_framework>
+#    $<TARGET_OBJECTS:tf_core_kernels>
+#    $<TARGET_OBJECTS:tf_cc_framework>
+#    $<TARGET_OBJECTS:tf_cc_ops>
+#    $<TARGET_OBJECTS:tf_core_ops>
+#    $<TARGET_OBJECTS:tf_core_direct_session>
+#    $<TARGET_OBJECTS:tf_core_distributed_runtime>
+#    $<$<BOOL:${tensorflow_ENABLE_GPU}>:$<TARGET_OBJECTS:tf_stream_executor>>
+#)
 
-target_link_libraries(grpc_tensorflow_server PUBLIC
-    tf_protos_cc
-    ${tf_core_gpu_kernels_lib}
-    ${tensorflow_EXTERNAL_LIBRARIES}
-)
+#target_link_libraries(grpc_tensorflow_server PUBLIC
+#    tf_protos_cc
+#    ${tf_core_gpu_kernels_lib}
+#    ${tensorflow_EXTERNAL_LIBRARIES}
+#)

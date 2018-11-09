@@ -32,6 +32,8 @@ if(WIN32)
       URL ${farmhash_URL}
       URL_HASH ${farmhash_HASH}
       DOWNLOAD_DIR "${DOWNLOAD_LOCATION}"
+      DOWNLOAD_COMMAND ${CMAKE_COMMAND} -E copy_directory ${CMAKE_CURRENT_SOURCE_DIR}/../../../external/farmhash ${CMAKE_CURRENT_BINARY_DIR}/farmhash/src/farmhash
+      UPDATE_COMMAND ""
       BUILD_IN_SOURCE 1
       BUILD_BYPRODUCTS ${farmhash_STATIC_LIBRARIES}
       PATCH_COMMAND ${CMAKE_COMMAND} -E copy_if_different ${CMAKE_CURRENT_SOURCE_DIR}/patches/farmhash/CMakeLists.txt ${farmhash_BUILD}
@@ -48,6 +50,8 @@ else()
       URL ${farmhash_URL}
       URL_HASH ${farmhash_HASH}
       DOWNLOAD_DIR "${DOWNLOAD_LOCATION}"
+      DOWNLOAD_COMMAND ${CMAKE_COMMAND} -E copy_directory ${CMAKE_CURRENT_SOURCE_DIR}/../../../external/farmhash ${CMAKE_CURRENT_BINARY_DIR}/farmhash/src/farmhash
+      UPDATE_COMMAND "autoreconf"
       BUILD_COMMAND $(MAKE)
       INSTALL_COMMAND $(MAKE) install
       CONFIGURE_COMMAND

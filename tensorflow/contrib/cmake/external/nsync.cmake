@@ -41,9 +41,12 @@ ExternalProject_Add(nsync
     GIT_REPOSITORY ${nsync_URL}
     GIT_TAG ${nsync_TAG}
     DOWNLOAD_DIR "${DOWNLOAD_LOCATION}"
+    DOWNLOAD_COMMAND ${CMAKE_COMMAND} -E copy_directory ${CMAKE_CURRENT_SOURCE_DIR}/../../../external/nsync ${CMAKE_CURRENT_BINARY_DIR}/nsync/src/nsync
+    UPDATE_COMMAND ""
     BUILD_IN_SOURCE 1
     BUILD_BYPRODUCTS ${nsync_STATIC_LIBRARIES}
     PATCH_COMMAND ${CMAKE_COMMAND} -E copy_if_different ${CMAKE_CURRENT_SOURCE_DIR}/patches/nsync/CMakeLists.txt ${nsync_BUILD}
+    UPDATE_COMMAND ""
     INSTALL_DIR ${nsync_INSTALL}
     CMAKE_CACHE_ARGS
         -DCMAKE_BUILD_TYPE:STRING=Release
@@ -51,5 +54,23 @@ ExternalProject_Add(nsync
         -DCMAKE_INSTALL_PREFIX:STRING=${nsync_INSTALL}
 	-DNSYNC_LANGUAGE:STRING=c++11)
 
-add_custom_command(TARGET nsync_copy_headers_to_destination PRE_BUILD
-    COMMAND ${CMAKE_COMMAND} -E copy_directory ${nsync_INSTALL}/include/ ${nsync_INCLUDE_DIR}/)
+if(WIN32)
+    add_custom_command(TARGET nsync_copy_headers_to_destination PRE_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different ${nsync_INSTALL}/include/nsync.h ${nsync_INCLUDE_DIR}/
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different ${nsync_INSTALL}/include/nsync_atomic.h ${nsync_INCLUDE_DIR}/
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different ${nsync_INSTALL}/include/nsync_counter.h ${nsync_INCLUDE_DIR}/
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different ${nsync_INSTALL}/include/nsync_cpp.h ${nsync_INCLUDE_DIR}/
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different ${nsync_INSTALL}/include/nsync_cv.h ${nsync_INCLUDE_DIR}/
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different ${nsync_INSTALL}/include/nsync_debug.h ${nsync_INCLUDE_DIR}/
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different ${nsync_INSTALL}/include/nsync_mu.h ${nsync_INCLUDE_DIR}/
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different ${nsync_INSTALL}/include/nsync_mu_wait.h ${nsync_INCLUDE_DIR}/
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different ${nsync_INSTALL}/include/nsync_note.h ${nsync_INCLUDE_DIR}/
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different ${nsync_INSTALL}/include/nsync_once.h ${nsync_INCLUDE_DIR}/
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different ${nsync_INSTALL}/include/nsync_time.h ${nsync_INCLUDE_DIR}/
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different ${nsync_INSTALL}/include/nsync_time_internal.h ${nsync_INCLUDE_DIR}/
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different ${nsync_INSTALL}/include/nsync_waiter.h ${nsync_INCLUDE_DIR}/
+    )
+else()
+    add_custom_command(TARGET nsync_copy_headers_to_destination PRE_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different ${nsync_INSTALL}/include/* ${nsync_INCLUDE_DIR}/)
+endif()

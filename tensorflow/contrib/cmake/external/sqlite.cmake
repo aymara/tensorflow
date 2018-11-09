@@ -37,6 +37,8 @@ if (WIN32)
         URL ${sqlite_URL}
         URL_HASH ${sqlite_HASH}
         BUILD_BYPRODUCTS ${sqlite_STATIC_LIBRARIES}
+        DOWNLOAD_COMMAND ${CMAKE_COMMAND} -E copy_directory ${CMAKE_CURRENT_SOURCE_DIR}/../../../external/sqlite ${CMAKE_CURRENT_BINARY_DIR}/sqlite/src/sqlite
+        UPDATE_COMMAND ""
         PATCH_COMMAND ${CMAKE_COMMAND} -E copy_if_different ${CMAKE_CURRENT_SOURCE_DIR}/patches/sqlite/CMakeLists.txt ${sqlite_BUILD}
         INSTALL_DIR ${sqlite_INSTALL}
         DOWNLOAD_DIR "${DOWNLOAD_LOCATION}"
@@ -54,6 +56,8 @@ else()
         PATCH_COMMAND ${CMAKE_COMMAND} -E copy_if_different ${CMAKE_CURRENT_SOURCE_DIR}/patches/sqlite/CMakeLists.txt ${sqlite_BUILD}
         INSTALL_DIR ${sqlite_INSTALL}
         DOWNLOAD_DIR "${DOWNLOAD_LOCATION}"
+        DOWNLOAD_COMMAND ${CMAKE_COMMAND} -E copy_directory ${CMAKE_CURRENT_SOURCE_DIR}/../../../external/sqlite ${CMAKE_CURRENT_BINARY_DIR}/sqlite/src/sqlite
+        UPDATE_COMMAND ""
         CMAKE_CACHE_ARGS
             -DCMAKE_POSITION_INDEPENDENT_CODE:BOOL=${tensorflow_ENABLE_POSITION_INDEPENDENT_CODE}
             -DCMAKE_BUILD_TYPE:STRING=Release

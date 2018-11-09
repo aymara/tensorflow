@@ -184,8 +184,12 @@ function(add_python_module MODULE_NAME)
     cmake_parse_arguments(ADD_PYTHON_MODULE "${options}" "" "" ${ARGN})
     add_custom_command(TARGET tf_python_touchup_modules PRE_BUILD
         COMMAND ${CMAKE_COMMAND} -E make_directory "${CMAKE_CURRENT_BINARY_DIR}/tf_python/${MODULE_NAME}")
+
+    if(NOT EXISTS "${CMAKE_CURRENT_BINARY_DIR}/tf_python/${MODULE_NAME}/__init__.py")
     add_custom_command(TARGET tf_python_touchup_modules PRE_BUILD
         COMMAND ${CMAKE_COMMAND} -E touch "${CMAKE_CURRENT_BINARY_DIR}/tf_python/${MODULE_NAME}/__init__.py")
+    endif()
+
     file(GLOB module_python_srcs RELATIVE ${tensorflow_source_dir}
         "${tensorflow_source_dir}/${MODULE_NAME}/*.py"
     )

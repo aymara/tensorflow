@@ -57,14 +57,14 @@ if(WIN32)
       COMMAND ${PYTHON_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tools/create_def_file.py
           --input "${tensorflow_static_dependencies}"
           --output "${tensorflow_deffile}"
-          --target tensorflow.dll
+          --target tensorflow-for-lima.dll
           --bitness "${tensorflow_target_bitness}"
   )
 endif(WIN32)
 
 # tensorflow is a shared library containing all of the
 # TensorFlow runtime and the standard ops and kernels.
-add_library(tensorflow SHARED
+add_library(tensorflow-for-lima SHARED
     $<TARGET_OBJECTS:tf_c>
     $<TARGET_OBJECTS:tf_cc>
     $<TARGET_OBJECTS:tf_cc_framework>
@@ -83,7 +83,7 @@ add_library(tensorflow SHARED
     ${tensorflow_deffile}
 )
 
-target_link_libraries(tensorflow PRIVATE
+target_link_libraries(tensorflow-for-lima PRIVATE
     ${tf_core_gpu_kernels_lib}
     ${tensorflow_EXTERNAL_LIBRARIES}
     tf_protos_cc
@@ -93,21 +93,21 @@ target_link_libraries(tensorflow PRIVATE
 # linking to the tensorflow library. Adding the following libraries fixes it.
 # See issue on github: https://github.com/tensorflow/tensorflow/issues/9593
 if(CMAKE_COMPILER_IS_GNUCC AND CMAKE_CXX_COMPILER_VERSION VERSION_GREATER 5.0)
-    target_link_libraries(tensorflow PRIVATE gcc_s gcc)
+    target_link_libraries(tensorflow-for-lima PRIVATE gcc_s gcc)
 endif()
 
 if(WIN32)
-  add_dependencies(tensorflow tensorflow_static)
+  add_dependencies(tensorflow-for-lima tensorflow_static)
 endif(WIN32)
 
-target_include_directories(tensorflow PUBLIC 
+target_include_directories(tensorflow-for-lima PUBLIC
     $<INSTALL_INTERFACE:include/>)
 
-install(TARGETS tensorflow EXPORT tensorflow_export
+install(TARGETS tensorflow-for-lima EXPORT tensorflow_export
         RUNTIME DESTINATION bin
         LIBRARY DESTINATION lib
         ARCHIVE DESTINATION lib)
-        
+
 install(EXPORT tensorflow_export
         FILE TensorflowConfig.cmake
         DESTINATION lib/cmake)
@@ -145,3 +145,18 @@ install(DIRECTORY ${tensorflow_source_dir}/third_party/eigen3/
 # unsupported Eigen directory
 install(DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/eigen/src/eigen/unsupported/Eigen/
         DESTINATION include/unsupported/Eigen)
+
+
+# Package Generator  #######################################################
+set(VERSION_MAJOR "1")
+set(VERSION_MINOR "9")
+set(VERSION_PATCH "0")
+set(CPACK_GENERATOR "NSIS")
+set(CPACK_NSIS_MODIFY_PATH ON)
+set(CPACK_PACKAGE_VERSION_MAJOR "${VERSION_MAJOR}")
+set(CPACK_PACKAGE_VERSION_MINOR "${VERSION_MINOR}")
+set(CPACK_PACKAGE_VERSION_PATCH "${VERSION_PATCH}")
+set(CPACK_PACKAGE_VENDOR "CEA LIST")
+set(CPACK_PACKAGE_CONTACT "lima.publisher@tuta.io")
+set(CPACK_PACKAGE_FILE_NAME "${CMAKE_PROJECT_NAME}-${VERSION_MAJOR}.${VERSION_MINOR}.${VERSION_PATCH}")
+include (CPack)

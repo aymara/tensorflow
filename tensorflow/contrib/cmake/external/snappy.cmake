@@ -38,8 +38,11 @@ ExternalProject_Add(snappy
     GIT_REPOSITORY ${snappy_URL}
     GIT_TAG ${snappy_TAG}
     DOWNLOAD_DIR "${DOWNLOAD_LOCATION}"
+    DOWNLOAD_COMMAND ${CMAKE_COMMAND} -E copy_directory ${CMAKE_CURRENT_SOURCE_DIR}/../../../external/snappy  ${CMAKE_CURRENT_BINARY_DIR}/snappy/src/snappy
+    UPDATE_COMMAND ""
     BUILD_IN_SOURCE 1
     BUILD_BYPRODUCTS ${snappy_STATIC_LIBRARIES}
+    UPDATE_COMMAND ""
     INSTALL_COMMAND ""
     LOG_DOWNLOAD ON
     LOG_CONFIGURE ON

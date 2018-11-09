@@ -180,10 +180,15 @@ else()
   file(GLOB_RECURSE tf_protos_grpc_cc_srcs RELATIVE ${tensorflow_source_dir}
       "${tensorflow_source_dir}/tensorflow/core/debug/*.proto"
   )
-  RELATIVE_PROTOBUF_GENERATE_GRPC_CPP(PROTO_GRPC_SRCS PROTO_GRPC_HDRS
-      ${tensorflow_source_dir} ${tf_protos_grpc_cc_srcs}
-  )
-  add_library(tf_protos_cc ${PROTO_GRPC_SRCS} ${PROTO_GRPC_HDRS} ${PROTO_SRCS} ${PROTO_HDRS})
+
+  if(tensorflow_ENABLE_GRPC_SUPPORT)
+    RELATIVE_PROTOBUF_GENERATE_GRPC_CPP(PROTO_GRPC_SRCS PROTO_GRPC_HDRS
+        ${tensorflow_source_dir} ${tf_protos_grpc_cc_srcs}
+    )
+    add_library(tf_protos_cc ${PROTO_GRPC_SRCS} ${PROTO_GRPC_HDRS} ${PROTO_SRCS} ${PROTO_HDRS})
+  else()
+    add_library(tf_protos_cc ${PROTO_SRCS} ${PROTO_HDRS})
+  endif()
 endif()
 
 ########################################################

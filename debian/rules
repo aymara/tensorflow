@@ -1,0 +1,37 @@
+#!/usr/bin/make -f
+
+BUILDDIR = build_dir
+
+# secondly called by launchpad
+build:
+	mkdir $(BUILDDIR);
+	cd $(BUILDDIR); cmake -DCMAKE_INSTALL_PREFIX=../debian/tmp/libtensorflow-for-lima-dev/usr ../tensorflow/contrib/cmake
+	make -C $(BUILDDIR) -j 4
+
+# thirdly called by launchpad
+binary: binary-indep binary-arch
+
+binary-indep:
+	# nothing to be done
+
+binary-arch:
+	cd $(BUILDDIR); cmake -P cmake_install.cmake
+	mkdir -p debian/tmp/libtensorflow-for-lima-dev/usr/include/tensorflow-for-lima
+	mkdir -p debian/tmp/libtensorflow-for-lima-dev/DEBIAN
+	mkdir -p debian/tmp/libtensorflow-for-lima-generic/DEBIAN
+	mkdir -p debian/tmp/libtensorflow-for-lima-generic/usr/lib/
+	mv `ls -d debian/tmp/libtensorflow-for-lima-dev/usr/include/* | grep -v "/tensorflow-for-lima"` -t debian/tmp/libtensorflow-for-lima-dev/usr/include/tensorflow-for-lima/
+	mv debian/tmp/libtensorflow-for-lima-dev/usr/lib/cmake/TensorflowConfig-noconfig.cmake debian/tmp/libtensorflow-for-lima-dev/usr/lib/cmake/TensorflowForLimaConfig-noconfig.cmake
+	mv debian/tmp/libtensorflow-for-lima-dev/usr/lib/cmake/TensorflowConfig.cmake debian/tmp/libtensorflow-for-lima-dev/usr/lib/cmake/TensorflowForLimaConfig.cmake
+	mv debian/tmp/libtensorflow-for-lima-dev/usr/lib/lib*.so debian/tmp/libtensorflow-for-lima-generic/usr/lib/
+	dpkg-gencontrol -plibtensorflow-for-lima-generic -Pdebian/tmp/libtensorflow-for-lima-generic/
+	dpkg-gencontrol -plibtensorflow-for-lima-dev -Pdebian/tmp/libtensorflow-for-lima-dev/
+	dpkg --build debian/tmp/libtensorflow-for-lima-generic ..
+	dpkg --build debian/tmp/libtensorflow-for-lima-dev ..
+
+# firstly called by launchpad
+clean:
+	rm -f build
+	rm -rf $(BUILDDIR)
+
+.PHONY: binary binary-arch binary-indep clean

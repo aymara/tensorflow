@@ -35,6 +35,8 @@ ExternalProject_Add(lmdb
         ${CMAKE_CURRENT_SOURCE_DIR}/patches/lmdb/CMakeLists.txt ${lmdb_BUILD}
     INSTALL_DIR ${lmdb_INSTALL}
     DOWNLOAD_DIR "${DOWNLOAD_LOCATION}"
+    DOWNLOAD_COMMAND ${CMAKE_COMMAND} -E copy_directory ${CMAKE_CURRENT_SOURCE_DIR}/../../../external/lmdb ${CMAKE_CURRENT_BINARY_DIR}/lmdb/src/lmdb
+    UPDATE_COMMAND ""
     CMAKE_CACHE_ARGS
         -DCMAKE_POSITION_INDEPENDENT_CODE:BOOL=${tensorflow_ENABLE_POSITION_INDEPENDENT_CODE}
         -DCMAKE_BUILD_TYPE:STRING=Release

@@ -28,6 +28,8 @@ if(WIN32)
       URL ${fft2d_URL}
       URL_HASH ${fft2d_HASH}
       DOWNLOAD_DIR "${DOWNLOAD_LOCATION}"
+      DOWNLOAD_COMMAND ${CMAKE_COMMAND} -E copy_directory ${CMAKE_CURRENT_SOURCE_DIR}/../../../external/fft2d ${CMAKE_CURRENT_BINARY_DIR}/fft2d/src/fft2d
+      UPDATE_COMMAND ""
       BUILD_IN_SOURCE 1
       BUILD_BYPRODUCTS ${fft2d_STATIC_LIBRARIES}
       PATCH_COMMAND ${CMAKE_COMMAND} -E copy_if_different ${CMAKE_CURRENT_SOURCE_DIR}/patches/fft2d/CMakeLists.txt ${fft2d_BUILD}/src/fft2d/CMakeLists.txt
@@ -44,6 +46,8 @@ else()
       URL ${fft2d_URL}
       URL_HASH ${fft2d_HASH}
       DOWNLOAD_DIR "${DOWNLOAD_LOCATION}"
+      DOWNLOAD_COMMAND ${CMAKE_COMMAND} -E copy_directory ${CMAKE_CURRENT_SOURCE_DIR}/../../../external/fft2d ${CMAKE_CURRENT_BINARY_DIR}/fft2d/src/fft2d
+      UPDATE_COMMAND ""
       BUILD_IN_SOURCE 1
       PATCH_COMMAND ${CMAKE_COMMAND} -E copy_if_different ${CMAKE_CURRENT_SOURCE_DIR}/patches/fft2d/CMakeLists.txt ${fft2d_BUILD}/src/fft2d/CMakeLists.txt
       INSTALL_DIR ${fft2d_INSTALL}

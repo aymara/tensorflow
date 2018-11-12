@@ -2,7 +2,7 @@ Source: tensorflow-for-lima
 Section: devel
 Priority: optional
 Maintainer: LIMA Publisher <lima.publisher@tuta.io>
-Build-Depends: cmake, git, build-essential, pkg-config, automake
+Build-Depends: cmake, git, build-essential, pkg-config, automake, python
 Homepage: https://github.com/aymara
 
 Package: libtensorflow-for-lima-generic

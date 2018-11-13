@@ -510,6 +510,8 @@ else(tensorflow_ENABLE_GPU)
     msvcp_dll_name=msvcp140.dll)
 endif(tensorflow_ENABLE_GPU)
 
+add_definitions(-DTENSORFLOW_USE_ABSL)
+
 # Find python executable
 include(FindPythonInterp)
 if(NOT ${PYTHONINTERP_FOUND})

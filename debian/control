@@ -11,6 +11,7 @@ Section: devel
 Priority: optional
 Depends:
 Provides: libtensorflow-for-lima
+Conflicts: libtensorflow-for-lima-avx
 Description: TensorFlow package required for LIMA NLP toolkit to work. Compiled with -march=x86-64
 
 Package: libtensorflow-for-lima-avx
@@ -19,12 +20,13 @@ Section: devel
 Priority: optional
 Depends: 
 Provides: libtensorflow-for-lima
+Conflicts: libtensorflow-for-lima-generic
 Description: TensorFlow package required for LIMA NLP toolkit to work. Compiled with -march=sandybridge
 
 Package: libtensorflow-for-lima-dev
 Architecture: any-amd64
 Section: devel
 Priority: optional
-Depends: libtensorflow-for-lima (= ${binary:Version})
+Depends: libtensorflow-for-lima
 Description: TensorFlow package required for LIMA NLP toolkit to be compiled.
 

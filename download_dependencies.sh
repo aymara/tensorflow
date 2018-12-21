@@ -38,6 +38,7 @@ git clone --recurse-submodules https://github.com/grpc/grpc.git grpc
 pushd grpc
 git checkout d184fa229d75d336aedea0041bd59cb93e7e267f
 rm -rf .git
+find external/ -name .git | xargs -I XX rm -rf XX
 rm third_party/libcxx/test/std/experimental/filesystem/Inputs/static_test_env/bad_symlink
 popd
 

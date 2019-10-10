@@ -1,3 +1,11 @@
+tensorflow-for-lima (1.9-ubuntu3~18.04) bionic; urgency=medium
+
+  * Disable GTests in grpc
+  * Use Release build for TensorFlow
+
+ -- LIMA Publisher <lima.publisher@tuta.io>  Tue, 10 Oct 2019 13:46:00 +0100
+
+
 tensorflow-for-lima (1.9-ubuntu2~18.04) bionic; urgency=medium
 
   * -O3 g++ option added

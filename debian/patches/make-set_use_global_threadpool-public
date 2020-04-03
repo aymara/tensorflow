@@ -1,0 +1,39 @@
+Description: <short summary of the patch>
+ .
+ tensorflow-for-lima (1.9-ubuntu4~18.04) bionic; urgency=medium
+ .
+   * make tensorflow::LocalDevice::set_use_global_threadpool public. This makes possible to change threading parameters of the second session within the process.
+Author: LIMA Publisher <lima.publisher@tuta.io>
+
+---
+The information above should follow the Patch Tagging Guidelines, please
+checkout http://dep.debian.net/deps/dep3/ to learn about the format. Here
+are templates for supplementary fields that you might want to add:
+
+Origin: other, <url of original patch>
+Bug: <url in upstream bugtracker>
+Bug-Debian: https://bugs.debian.org/<bugnumber>
+Bug-Ubuntu: https://launchpad.net/bugs/<bugnumber>
+Forwarded: <no|not-needed|url proving that it has been forwarded>
+Reviewed-By: <name and email of someone who approved the patch>
+Last-Update: 2020-04-02
+
+--- tensorflow-for-lima-1.9.orig/tensorflow/core/common_runtime/local_device.h
++++ tensorflow-for-lima-1.9/tensorflow/core/common_runtime/local_device.h
+@@ -37,13 +37,13 @@ class LocalDevice : public Device {
+               const DeviceAttributes& attributes);
+   ~LocalDevice() override;
+ 
+- private:
+-  static bool use_global_threadpool_;
+-
+   static void set_use_global_threadpool(bool use_global_threadpool) {
+     use_global_threadpool_ = use_global_threadpool;
+   }
+ 
++ private:
++  static bool use_global_threadpool_;
++
+   struct EigenThreadPoolInfo;
+   std::unique_ptr<EigenThreadPoolInfo> owned_tp_info_;
+ 

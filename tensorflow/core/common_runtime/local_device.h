@@ -37,12 +37,12 @@ class LocalDevice : public Device {
               const DeviceAttributes& attributes);
   ~LocalDevice() override;
 
- private:
-  static bool use_global_threadpool_;
-
   static void set_use_global_threadpool(bool use_global_threadpool) {
     use_global_threadpool_ = use_global_threadpool;
   }
+
+ private:
+  static bool use_global_threadpool_;
 
   struct EigenThreadPoolInfo;
   std::unique_ptr<EigenThreadPoolInfo> owned_tp_info_;

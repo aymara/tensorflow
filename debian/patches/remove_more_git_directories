@@ -1,0 +1,23 @@
+Description: Remove more .git directories
+Author: LIMA Publisher <lima.publisher@tuta.io>
+
+---
+
+--- tensorflow-for-lima-1.9.orig/download_dependencies.sh
++++ tensorflow-for-lima-1.9/download_dependencies.sh
+@@ -38,6 +38,7 @@ git clone --recurse-submodules https://g
+ pushd grpc
+ git checkout d184fa229d75d336aedea0041bd59cb93e7e267f
+ rm -rf .git
++find external/ -name .git | xargs -I XX rm -rf XX
+ rm third_party/libcxx/test/std/experimental/filesystem/Inputs/static_test_env/bad_symlink
+ popd
+ 
+@@ -94,6 +95,7 @@ mv sqlite-amalgamation-3230100 sqlite
+ 
+ git clone https://github.com/madler/zlib zlib
+ pushd zlib
++rm -rf .git
+ popd
+ 
+ popd

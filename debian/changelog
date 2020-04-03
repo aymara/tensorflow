@@ -1,3 +1,10 @@
+tensorflow-for-lima (1.9-ubuntu4~18.04) bionic; urgency=medium
+
+  * make tensorflow::LocalDevice::set_use_global_threadpool public
+
+ -- LIMA Publisher <lima.publisher@tuta.io>  Tue, 02 Apr 2020 11:00:00 +0100
+
+
 tensorflow-for-lima (1.9-ubuntu3~18.04) bionic; urgency=medium
 
   * Disable GTests in grpc

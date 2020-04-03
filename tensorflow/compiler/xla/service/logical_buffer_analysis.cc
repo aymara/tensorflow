@@ -113,6 +113,13 @@ Status LogicalBufferAnalysis::HandleGetTupleElement(HloInstruction*) {
   return Status::OK();
 }
 
+Status LogicalBufferAnalysis::HandleAddDependency(
+    HloInstruction* add_dependency) {
+  // AddDependency just forwards the value of its zero-th operand and does not
+  // create buffers.
+  return Status::OK();
+}
+
 Status LogicalBufferAnalysis::HandleCopy(HloInstruction* copy) {
   // The top-level buffer (index={}) for kCopy is newly created, but all other
   // buffers (in the case of a tuple shape) come from the operand
@@ -149,6 +156,21 @@ Status LogicalBufferAnalysis::HandleSend(HloInstruction* send) {
   NewLogicalBuffer(send, /*index=*/{});
   NewLogicalBuffer(send, /*index=*/{1});
   NewLogicalBuffer(send, /*index=*/{2});
+  return Status::OK();
+}
+
+Status LogicalBufferAnalysis::HandleCopyStart(HloInstruction* copy_start) {
+  // CopyStart defines the tuple, target buffer at index {0}, and context at
+  // index {2}.
+  NewLogicalBuffer(copy_start, /*index=*/{});
+  NewLogicalBuffer(copy_start, /*index=*/{0});
+  NewLogicalBuffer(copy_start, /*index=*/{2});
+  return Status::OK();
+}
+
+Status LogicalBufferAnalysis::HandleCopyDone(HloInstruction* copy_done) {
+  // The output of CopyDone aliases with operand {0}. CopyDone doesn't create
+  // any buffers.
   return Status::OK();
 }
 

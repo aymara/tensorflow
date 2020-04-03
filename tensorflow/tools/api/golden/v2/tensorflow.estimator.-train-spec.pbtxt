@@ -1,7 +1,7 @@
 path: "tensorflow.estimator.TrainSpec"
 tf_class {
-  is_instance: "<class \'tensorflow.python.estimator.training.TrainSpec\'>"
-  is_instance: "<class \'tensorflow.python.estimator.training.TrainSpec\'>"
+  is_instance: "<class \'tensorflow_estimator.python.estimator.training.TrainSpec\'>"
+  is_instance: "<class \'tensorflow_estimator.python.estimator.training.TrainSpec\'>"
   is_instance: "<type \'tuple\'>"
   member {
     name: "hooks"
@@ -13,6 +13,10 @@ tf_class {
   }
   member {
     name: "max_steps"
+    mtype: "<type \'property\'>"
+  }
+  member {
+    name: "saving_listeners"
     mtype: "<type \'property\'>"
   }
   member_method {

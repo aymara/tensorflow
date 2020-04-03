@@ -397,11 +397,11 @@ class ImportGraphDefTest(test.TestCase):
       # Run the imported graph.
       # TODO(b/76173421): make this work (currently DCHECKS)
       # with self.cached_session() as sess:
-      #   sess.run(imported_init)
-      #   self.assertEqual(sess.run(imported_var), 1.0)
-      #   self.assertEqual(sess.run(imported_assign), 2.0)
-      #   self.assertEqual(list(sess.run(imported_shape)), [])
-      #   self.assertEqual(list(sess.run(new_var_shape)), [])
+      #   self.evaluate(imported_init)
+      #   self.assertEqual(self.evaluate(imported_var), 1.0)
+      #   self.assertEqual(self.evaluate(imported_assign), 2.0)
+      #   self.assertEqual(list(self.evaluate(imported_shape)), [])
+      #   self.assertEqual(list(self.evaluate(new_var_shape)), [])
 
   def testWhileLoop(self):
     # Produce GraphDef containing while loop.
@@ -418,7 +418,7 @@ class ImportGraphDefTest(test.TestCase):
                                               return_elements=[r.name])
       self.assertEqual(imported_r.name, "import/" + r.name)
       with self.cached_session() as sess:
-        self.assertEqual(sess.run(imported_r), 10)
+        self.assertEqual(self.evaluate(imported_r), 10)
 
   def testImportWhileLoopInCond(self):
     # Produce GraphDef containing while loop.
@@ -458,7 +458,7 @@ class ImportGraphDefTest(test.TestCase):
           lambda i: i < 2, ImportFn, [0],
           shape_invariants=[tensor_shape.TensorShape(None)])
       with self.cached_session() as sess:
-        self.assertEqual(sess.run(out), 10)
+        self.assertEqual(self.evaluate(out), 10)
 
   def testTypeMismatchInGraphDef(self):
     # TODO(skyewm): improve error message
@@ -471,21 +471,6 @@ class ImportGraphDefTest(test.TestCase):
             node { name: 'A' op: 'IntOutput' }
             node { name: 'B' op: 'FloatInput' input: 'A:0' }
             """))
-
-  def testShapeWhitelist(self):
-    # Barrier's shape is an output vector of 2, but the
-    # graph says it's a scalar.  This is currently whitelisted.
-    with ops.Graph().as_default():
-      _ = importer.import_graph_def(
-          self._MakeGraphDef("""
-          node { name: 'A' op: 'Barrier'
-                 attr { key: '_output_shapes'
-                        value { list { shape { } } } }
-                 attr { key: 'component_types'
-                        value { list { type: DT_FLOAT } } } }
-          """),
-          return_elements=["A"],
-          name="import")
 
   def testShapeWhitelistViolation(self):
     # L2 loss produces a scalar shape, but the graph
@@ -930,7 +915,7 @@ class ImportGraphDefTest(test.TestCase):
           name="",
           return_elements=["id:0"])
       with self.cached_session():
-        self.assertEqual(5.0, t.eval())
+        self.assertEqual(5.0, self.evaluate(t))
 
   def testInvalidInputForReturnOperations(self):
     with ops.Graph().as_default():
@@ -1071,7 +1056,7 @@ class ImportGraphDefTest(test.TestCase):
       tensor_input = np.ones(input_shape, dtype=np.float32)
       t = constant_op.constant(tensor_input, shape=input_shape)
       g = array_ops.identity(t)
-      g.eval()
+      self.evaluate(g)
 
   def testVersion(self):
     v0 = versions.GRAPH_DEF_VERSION_MIN_CONSUMER
@@ -1255,7 +1240,7 @@ class ImportGraphDefTest(test.TestCase):
     z = TestFunc()
 
     with self.cached_session():
-      z_val = z.eval()
+      z_val = self.evaluate(z)
       self.assertEqual(z_val, -2.0)
 
   def testImportGraphWithFunctionTwice(self):

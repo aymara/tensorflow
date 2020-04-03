@@ -17,11 +17,15 @@ limitations under the License.
 #ifndef TENSORFLOW_COMPILER_XLA_SERVICE_INSTRUCTION_FUSION_H_
 #define TENSORFLOW_COMPILER_XLA_SERVICE_INSTRUCTION_FUSION_H_
 
+#include <functional>
+#include <utility>
+
 #include "tensorflow/compiler/xla/service/fusion_queue.h"
 #include "tensorflow/compiler/xla/service/hlo_computation.h"
 #include "tensorflow/compiler/xla/service/hlo_instruction.h"
 #include "tensorflow/compiler/xla/service/hlo_module.h"
 #include "tensorflow/compiler/xla/service/hlo_pass_interface.h"
+#include "tensorflow/compiler/xla/service/hlo_reachability.h"
 #include "tensorflow/core/platform/macros.h"
 
 namespace xla {
@@ -35,8 +39,12 @@ class InstructionFusion : public HloModulePass {
  public:
   explicit InstructionFusion(
       std::function<bool(const HloInstruction& instruction)> is_expensive,
-      bool may_duplicate = true)
-      : is_expensive_(is_expensive), may_duplicate_(may_duplicate) {}
+      bool may_duplicate = true,
+      FusionConfigCollection config_collection_mode =
+          FusionConfigCollection::kOff)
+      : is_expensive_(is_expensive),
+        may_duplicate_(may_duplicate),
+        config_collection_mode_(config_collection_mode) {}
   ~InstructionFusion() override = default;
   absl::string_view name() const override { return "fusion"; }
 
@@ -54,8 +62,7 @@ class InstructionFusion : public HloModulePass {
   // fused. The default implementation processes consumers in reverse post
   // order.
   virtual std::unique_ptr<FusionQueue> GetFusionQueue(
-      HloComputation* computation,
-      const std::function<bool(HloInstruction*)>& skip_producer);
+      HloComputation* computation);
 
   // Returns whether the given producer instruction should be fused into the
   // given consumer instruction. producer is necessarily an operand of consumer.
@@ -83,7 +90,13 @@ class InstructionFusion : public HloModulePass {
   virtual HloInstruction::FusionKind ChooseKind(const HloInstruction* producer,
                                                 const HloInstruction* consumer);
 
-  // Fuses producer into consumer.
+  // Fuses 'producer' into 'fusion_instruction'. 'fusion_instruction' needs to
+  // be a fusion instruction. Returns the newly created clone of 'producer'
+  // which is part of the fusion computation.
+  virtual HloInstruction* FuseInstruction(HloInstruction* fusion_instruction,
+                                          HloInstruction* producer);
+
+  // Fuses producer into consumer. Returns the fusion instruction.
   virtual HloInstruction* Fuse(HloInstruction* producer,
                                HloInstruction* consumer);
 
@@ -111,11 +124,19 @@ class InstructionFusion : public HloModulePass {
     return is_expensive_(instruction);
   }
 
+  // Whether multi-output fusion would introduce a cycle into the HLO graph.
+  bool MultiOutputFusionCreatesCycle(HloInstruction* producer,
+                                     HloInstruction* consumer);
+
   // Current HloComputation instance the loop fuser is traversing.
   HloComputation* computation_;
   HloModule* module_;
   // Reachability information for the current computation.
   std::unique_ptr<HloReachabilityMap> reachability_;
+
+  FusionConfigCollection config_collection_mode() {
+    return config_collection_mode_;
+  }
 
  private:
   // The set of producers whose consumers we cannot fuse into.
@@ -145,12 +166,11 @@ class InstructionFusion : public HloModulePass {
   // duplicated.
   std::function<bool(const HloInstruction& instruction)> is_expensive_;
 
-  // Whether multi-output fusion would introduce a cycle into the HLO graph.
-  bool MultiOutputFusionCreatesCycle(HloInstruction* producer,
-                                     HloInstruction* consumer);
-
   // Returns whether we may duplicate an instruction if we want to fuse it.
   bool may_duplicate_;
+
+  // Configuration mode.
+  FusionConfigCollection config_collection_mode_;
 
   TF_DISALLOW_COPY_AND_ASSIGN(InstructionFusion);
 };

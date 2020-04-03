@@ -24,13 +24,16 @@ import random
 import threading
 import weakref
 
+from absl.testing import parameterized
 import numpy as np
 
 from google.protobuf import text_format
 
 from tensorflow.core.framework import graph_pb2
 from tensorflow.core.protobuf import meta_graph_pb2
+from tensorflow.python.compat import compat
 from tensorflow.python.eager import context
+from tensorflow.python.framework import combinations
 from tensorflow.python.framework import constant_op
 from tensorflow.python.framework import dtypes
 from tensorflow.python.framework import errors
@@ -46,8 +49,9 @@ from tensorflow.python.ops import variables
 from tensorflow.python.platform import googletest
 
 
-class TestUtilTest(test_util.TensorFlowTestCase):
+class TestUtilTest(test_util.TensorFlowTestCase, parameterized.TestCase):
 
+  @test_util.run_deprecated_v1
   def test_assert_ops_in_graph(self):
     with self.test_session():
       constant_op.constant(["hello", "taffy"], name="hello")
@@ -59,6 +63,7 @@ class TestUtilTest(test_util.TensorFlowTestCase):
     self.assertRaises(ValueError, test_util.assert_ops_in_graph,
                       {"hello": "Variable"}, ops.get_default_graph())
 
+  @test_util.run_deprecated_v1
   def test_session_functions(self):
     with self.test_session() as sess:
       sess_ref = weakref.ref(sess)
@@ -455,11 +460,27 @@ class TestUtilTest(test_util.TensorFlowTestCase):
     k = math_ops.add(i, j, name="k")
 
     self.evaluate(variables.global_variables_initializer())
+    self.assertAllEqual([100] * 3, i)
     self.assertAllEqual([120] * 3, k)
     self.assertAllEqual([20] * 3, j)
 
     with self.assertRaisesRegexp(AssertionError, r"not equal lhs"):
       self.assertAllEqual([0] * 3, k)
+
+  @test_util.run_in_graph_and_eager_modes
+  def testAssertNotAllEqual(self):
+    i = variables.Variable([100], dtype=dtypes.int32, name="i")
+    j = constant_op.constant([20], dtype=dtypes.int32, name="j")
+    k = math_ops.add(i, j, name="k")
+
+    self.evaluate(variables.global_variables_initializer())
+    self.assertNotAllEqual([100] * 3, i)
+    self.assertNotAllEqual([120] * 3, k)
+    self.assertNotAllEqual([20] * 3, j)
+
+    with self.assertRaisesRegexp(
+        AssertionError, r"two values are equal at all elements.*extra message"):
+      self.assertNotAllEqual([120], k, msg="extra message")
 
   @test_util.run_in_graph_and_eager_modes
   def testAssertNotAllClose(self):
@@ -550,6 +571,7 @@ class TestUtilTest(test_util.TensorFlowTestCase):
     with self.assertRaises(AssertionError):
       self.assertAllLessEqual(x, 95.0)
 
+  @test_util.run_deprecated_v1
   def testAssertAllInRangeWithNonNumericValuesFails(self):
     s1 = constant_op.constant("Hello, ", name="s1")
     c = constant_op.constant([1 + 2j, -3 + 5j], name="c")
@@ -613,8 +635,9 @@ class TestUtilTest(test_util.TensorFlowTestCase):
     with self.assertRaises(AssertionError):
       self.assertAllInSet(x, (42,))
 
+  @test_util.run_deprecated_v1
   def testRandomSeed(self):
-    # Call setUp again for WithCApi case (since it makes a new defeault graph
+    # Call setUp again for WithCApi case (since it makes a new default graph
     # after setup).
     # TODO(skyewm): remove this when C API is permanently enabled.
     self.setUp()
@@ -680,7 +703,7 @@ class TestUtilTest(test_util.TensorFlowTestCase):
     self.assertIsNone(test_util.get_node_def_from_graph("bar", graph_def))
 
   def test_run_in_eager_and_graph_modes_test_class(self):
-    msg = "`run_test_in_graph_and_eager_modes` only supports test methods.*"
+    msg = "`run_in_graph_and_eager_modes` only supports test methods.*"
     with self.assertRaisesRegexp(ValueError, msg):
       @test_util.run_in_graph_and_eager_modes()
       class Foo(object):
@@ -705,6 +728,7 @@ class TestUtilTest(test_util.TensorFlowTestCase):
     test_util.run_in_graph_and_eager_modes(_test)(self)
     self.assertEqual(modes, ["graph"])
 
+  @test_util.run_deprecated_v1
   def test_run_in_graph_and_eager_modes_setup_in_same_mode(self):
     modes = []
     mode_name = lambda: "eager" if context.executing_eagerly() else "graph"
@@ -727,6 +751,61 @@ class TestUtilTest(test_util.TensorFlowTestCase):
 
     self.assertEqual(modes[0:2], ["setup_graph", "run_graph"])
     self.assertEqual(modes[2:], ["setup_eager", "run_eager"])
+
+  @parameterized.named_parameters(dict(testcase_name="argument",
+                                       arg=True))
+  @test_util.run_in_graph_and_eager_modes
+  def test_run_in_graph_and_eager_works_with_parameterized_keyword(self, arg):
+    self.assertEqual(arg, True)
+
+  @combinations.generate(combinations.combine(arg=True))
+  @test_util.run_in_graph_and_eager_modes
+  def test_run_in_graph_and_eager_works_with_combinations(self, arg):
+    self.assertEqual(arg, True)
+
+  def test_build_as_function_and_v1_graph(self):
+
+    class GraphModeAndFunctionTest(parameterized.TestCase):
+
+      def __init__(inner_self):  # pylint: disable=no-self-argument
+        super(GraphModeAndFunctionTest, inner_self).__init__()
+        inner_self.graph_mode_tested = False
+        inner_self.inside_function_tested = False
+
+      def runTest(self):
+        del self
+
+      @test_util.build_as_function_and_v1_graph
+      def test_modes(inner_self):  # pylint: disable=no-self-argument
+        if ops.inside_function():
+          self.assertFalse(inner_self.inside_function_tested)
+          inner_self.inside_function_tested = True
+        else:
+          self.assertFalse(inner_self.graph_mode_tested)
+          inner_self.graph_mode_tested = True
+
+    test_object = GraphModeAndFunctionTest()
+    test_object.test_modes_v1_graph()
+    test_object.test_modes_function()
+    self.assertTrue(test_object.graph_mode_tested)
+    self.assertTrue(test_object.inside_function_tested)
+
+  def test_with_forward_compatibility_horizons(self):
+
+    tested_codepaths = set()
+    def some_function_with_forward_compat_behavior():
+      if compat.forward_compatible(2050, 1, 1):
+        tested_codepaths.add("future")
+      else:
+        tested_codepaths.add("present")
+
+    @test_util.with_forward_compatibility_horizons(None, [2051, 1, 1])
+    def some_test(self):
+      del self  # unused
+      some_function_with_forward_compat_behavior()
+
+    some_test(None)
+    self.assertEqual(tested_codepaths, set(["present", "future"]))
 
 
 # Its own test case to reproduce variable sharing issues which only pop up when
@@ -809,6 +888,7 @@ class GarbageCollectionTest(test_util.TensorFlowTestCase):
       LeakedObjectTest().test_has_leak()
 
     LeakedObjectTest().test_has_no_leak()
+
 
 if __name__ == "__main__":
   googletest.main()

@@ -15,6 +15,8 @@ limitations under the License.
 
 #include "tensorflow/compiler/xla/service/hlo_module_group.h"
 
+#include "tensorflow/core/lib/hash/hash.h"
+
 namespace xla {
 
 HloModuleGroup::HloModuleGroup(std::unique_ptr<HloModule> module)
@@ -24,6 +26,14 @@ HloModuleGroup::HloModuleGroup(std::unique_ptr<HloModule> module)
 
 HloModuleGroup::HloModuleGroup(absl::string_view name,
                                absl::Span<std::unique_ptr<HloModule>> modules)
+    : name_(name) {
+  for (auto& module : modules) {
+    push_back(std::move(module));
+  }
+}
+
+HloModuleGroup::HloModuleGroup(
+    absl::string_view name, std::vector<std::unique_ptr<HloModule>>&& modules)
     : name_(name) {
   for (auto& module : modules) {
     push_back(std::move(module));
@@ -57,6 +67,14 @@ HloModuleGroupProto HloModuleGroup::ToProto() const {
   return proto;
 }
 
+uint64 HloModuleGroup::Hash() const {
+  uint64 result = 0;
+  for (auto& module : modules_) {
+    result = tensorflow::Hash64Combine(result, module->Hash());
+  }
+  return result;
+}
+
 /* static */ StatusOr<HloModuleGroup> HloModuleGroup::CreateFromProto(
     const HloModuleGroupProto& proto,
     absl::Span<const HloModuleConfig> module_configs) {
@@ -80,6 +98,12 @@ HloModuleGroupProto HloModuleGroup::ToProto() const {
 void HloModuleGroup::push_back(std::unique_ptr<HloModule> module) {
   modules_.push_back(std::move(module));
   module_ptrs_.push_back(modules_.back().get());
+}
+
+void HloModuleGroup::ReplaceModule(int index,
+                                   std::unique_ptr<HloModule> module) {
+  modules_.at(index) = std::move(module);
+  module_ptrs_.at(index) = modules_.at(index).get();
 }
 
 std::ostream& operator<<(std::ostream& out, const HloModuleGroup& group) {

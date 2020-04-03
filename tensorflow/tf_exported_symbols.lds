@@ -1,7 +1,10 @@
 *tensorflow*
+*toco*
 *perftools*gputools*
 *tf_*
 *TF_*
+*Eager*
 *TFE_*
 *nsync_*
-*pywrap_xla*
+*stream_executor*
+*xla*

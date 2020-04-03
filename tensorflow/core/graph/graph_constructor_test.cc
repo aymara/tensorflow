@@ -16,6 +16,7 @@ limitations under the License.
 #include "tensorflow/core/graph/graph_constructor.h"
 
 #include <vector>
+
 #include "tensorflow/core/common_runtime/shape_refiner.h"
 #include "tensorflow/core/framework/common_shape_fns.h"
 #include "tensorflow/core/framework/graph.pb.h"
@@ -51,7 +52,8 @@ class GraphConstructorTest : public ::testing::Test {
   }
 
   void ExpectError(const string& gdef_ascii,
-                   const std::vector<string>& expected_error_strs) {
+                   const std::vector<string>& expected_error_strs,
+                   string not_expected_error_str = "") {
     // Used to verify that errors don't change graph
     const string original_graph_description = GraphDebugString();
 
@@ -63,6 +65,13 @@ class GraphConstructorTest : public ::testing::Test {
     for (const string& error : expected_error_strs) {
       EXPECT_TRUE(status.error_message().find(error) != string::npos)
           << "Expected to find '" << error << "' in " << status;
+    }
+
+    if (!not_expected_error_str.empty()) {
+      EXPECT_TRUE(status.error_message().find(not_expected_error_str) ==
+                  string::npos)
+          << "Expected not to find '" << not_expected_error_str << "' in "
+          << status;
     }
 
     EXPECT_EQ(original_graph_description, GraphDebugString());
@@ -156,8 +165,7 @@ class GraphConstructorTest : public ::testing::Test {
       return "";
     }
     StringPiece loc(value[0]);
-    return str_util::ConsumePrefix(&loc, kColocationGroupPrefix) ? string(loc)
-                                                                 : "";
+    return absl::ConsumePrefix(&loc, kColocationGroupPrefix) ? string(loc) : "";
   }
 
   string GraphDebugString() const {
@@ -826,6 +834,27 @@ TEST_F(GraphConstructorTest, VersionGraph) {
   ExpectVersions(TF_GRAPH_DEF_VERSION_MIN_CONSUMER, TF_GRAPH_DEF_VERSION);
 }
 
+TEST_F(GraphConstructorTest, ForwardCompatError) {
+  ExpectError(
+      strings::StrCat(
+          "node { name: 'a:b' op: 'ABC' }\n"  // 'a:b' is an invalid name.
+          "versions { producer: ",
+          TF_GRAPH_DEF_VERSION + 22,
+          " min_consumer: ", TF_GRAPH_DEF_VERSION_MIN_CONSUMER, "}"),
+      {"forward compatibility guarantee"});
+}
+
+TEST_F(GraphConstructorTest, NoForwardCompatError) {
+  ExpectError(
+      strings::StrCat(
+          "node { name: 'a:b' op: 'ABC' }\n"  // 'a:b' is an invalid name.
+          "versions { producer: ",
+          TF_GRAPH_DEF_VERSION + 21,
+          " min_consumer: ", TF_GRAPH_DEF_VERSION_MIN_CONSUMER, "}"),
+      {"Node name contains invalid characters"},
+      "forward compatibility guarantee");
+}
+
 TEST_F(GraphConstructorTest, LowVersion) {
   ExpectError(strings::StrCat("versions { producer: ", -1, " }"),
               {strings::StrCat("GraphDef producer version -1 below min "
@@ -951,7 +980,7 @@ TEST_F(GraphConstructorTest, ImportGraphDef) {
   EXPECT_TRUE(HasControlEdge("D", sink));
   EXPECT_EQ(9, graph_.num_edges());
 
-  // Importing again should fail because of node name collissions.
+  // Importing again should fail because of node name collisions.
   s = ImportGraphDef(opts, def, &graph_, nullptr);
   EXPECT_TRUE(errors::IsInvalidArgument(s)) << s;
 
@@ -1141,31 +1170,6 @@ node {
                                      "available in GraphDef version 10") !=
               string::npos)
       << s;
-}
-
-TEST_F(GraphConstructorTest, ImportGraphDef_ShapeWhitelist) {
-  // Barrier's shape is an output vector of 2, but the graph says it's a vector
-  // of 1. This is currently whitelisted.
-  GraphDef def;
-  bool parsed = protobuf::TextFormat::ParseFromString(
-      R"EOF(
-      node {
-        name: "A"
-        op: "Barrier"
-        attr {
-          key: "_output_shapes"
-          value { list { shape {} } }
-        }
-        attr {
-          key: "component_types"
-          value { list { type: DT_FLOAT } }
-        }
-      }
-      )EOF",
-      &def);
-  ASSERT_TRUE(parsed);
-  Status s = ImportGraphDef(ImportGraphDefOptions(), def, &graph_, nullptr);
-  EXPECT_EQ(Status::OK(), s) << s;
 }
 
 TEST_F(GraphConstructorTest, ImportGraphDef_InputMap) {
@@ -3197,7 +3201,7 @@ versions {
   EXPECT_EQ(17, refiner.graph_def_version());
 }
 
-TEST_F(GraphConstructorTest, ImportGraphDef_ValidateColationConstraints) {
+TEST_F(GraphConstructorTest, ImportGraphDef_ValidateColocationConstraints) {
   GraphDef def;
   ASSERT_TRUE(protobuf::TextFormat::ParseFromString(
       "node { name: 'A' op: 'TestInput' attr { key: '_class' value { list { "
@@ -3210,6 +3214,33 @@ TEST_F(GraphConstructorTest, ImportGraphDef_ValidateColationConstraints) {
   EXPECT_TRUE(errors::IsInvalidArgument(s)) << s;
   options.validate_colocation_constraints = false;
   TF_EXPECT_OK(ImportGraphDef(options, def, &graph_, nullptr));
+}
+
+TEST_F(GraphConstructorTest, ImportGraphDef_ValidateDefaultDevice) {
+  std::string gdef_ascii(
+      R"EOF(
+      node { name: 'test_input' op: 'TestInput' }
+      node { name: 'test_input_with_dev' op: 'TestInput' device: 'some dev'}
+      node { name: 'test_op' op: 'TestMul' input: [ 'test_input:0', 'test_input:1' ] }
+      node { name: 'test_op_with_dev' op: 'TestMul' input: [ 'test_input:0', 'test_input:1' ] device: 'some dev'}
+      )EOF");
+
+  GraphDef gdef;
+  ASSERT_TRUE(protobuf::TextFormat::ParseFromString(gdef_ascii, &gdef));
+
+  ImportGraphDefOptions options;
+  options.default_device = "/gpu:13";
+  ImportGraphDefResults res;
+
+  TF_ASSERT_OK(ImportGraphDef(options, gdef, &graph_, NULL, &res));
+  std::map<string, string> node2dev;
+  for (Node* n : graph_.nodes()) {
+    node2dev[n->name()] = n->requested_device();
+  }
+  EXPECT_EQ(node2dev["test_input"], "/gpu:13");
+  EXPECT_EQ(node2dev["test_op"], "/gpu:13");
+  EXPECT_EQ(node2dev["test_input_with_dev"], "some dev");
+  EXPECT_EQ(node2dev["test_op_with_dev"], "some dev");
 }
 
 TEST_F(GraphConstructorTest, ImportGraphDef_UnknownOps) {

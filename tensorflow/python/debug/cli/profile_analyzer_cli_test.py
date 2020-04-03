@@ -70,6 +70,7 @@ def _assert_no_lines_match(pattern, lines):
         "%s matched at least one line in %s." % (pattern, str(lines)))
 
 
+@test_util.run_v1_only("b/120545219")
 class ProfileAnalyzerListProfileTest(test_util.TensorFlowTestCase):
 
   def testNodeInfoEmpty(self):
@@ -272,11 +273,11 @@ class ProfileAnalyzerListProfileTest(test_util.TensorFlowTestCase):
     prof_output = prof_analyzer.list_profile(["-f", ".*file2"]).lines
     _assert_at_least_one_line_matches(r"Add/123", prof_output)
     _assert_no_lines_match(r"Mul/456", prof_output)
-    # Fitler by execution time.
+    # Filter by execution time.
     prof_output = prof_analyzer.list_profile(["-e", "[5, 10]"]).lines
     _assert_at_least_one_line_matches(r"Mul/456", prof_output)
     _assert_no_lines_match(r"Add/123", prof_output)
-    # Fitler by op time.
+    # Filter by op time.
     prof_output = prof_analyzer.list_profile(["-o", ">=2"]).lines
     _assert_at_least_one_line_matches(r"Add/123", prof_output)
     _assert_no_lines_match(r"Mul/456", prof_output)
@@ -321,6 +322,7 @@ class ProfileAnalyzerListProfileTest(test_util.TensorFlowTestCase):
     _assert_at_least_one_line_matches(r"Device Total.*0\.009ms", prof_output)
 
 
+@test_util.run_v1_only("b/120545219")
 class ProfileAnalyzerPrintSourceTest(test_util.TensorFlowTestCase):
 
   def setUp(self):

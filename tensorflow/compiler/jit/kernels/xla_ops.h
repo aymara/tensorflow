@@ -16,6 +16,8 @@ limitations under the License.
 #ifndef TENSORFLOW_COMPILER_JIT_KERNELS_XLA_OPS_H_
 #define TENSORFLOW_COMPILER_JIT_KERNELS_XLA_OPS_H_
 
+#include <atomic>
+
 #include "tensorflow/compiler/jit/xla_compilation_cache.h"
 #include "tensorflow/compiler/jit/xla_device.h"
 #include "tensorflow/compiler/jit/xla_launch_util.h"
@@ -25,6 +27,7 @@ limitations under the License.
 #include "tensorflow/core/framework/tensor.h"
 #include "tensorflow/core/platform/macros.h"
 #include "tensorflow/core/util/stream_executor_util.h"
+#include "tensorflow/stream_executor/tf_allocator_adapter.h"
 
 namespace tensorflow {
 
@@ -33,18 +36,15 @@ namespace tensorflow {
 class XlaPlatformInfo {
  public:
   XlaPlatformInfo() : device_type_("") {}
+  XlaPlatformInfo(XlaPlatformInfo&&) = default;
   explicit XlaPlatformInfo(const DeviceType device_type,
                            se::Platform::Id platform_id,
                            const XlaDevice::Metadata* xla_device_metadata,
-                           std::unique_ptr<XlaAllocator> xla_allocator,
-                           xla::DeviceMemoryAllocator* device_allocator)
+                           se::DeviceMemoryAllocator* device_allocator)
       : device_type_(device_type),
         platform_id_(platform_id),
         xla_device_metadata_(xla_device_metadata),
-        xla_allocator_(std::move(xla_allocator)),
-        device_allocator_(device_allocator) {
-    CHECK((device_allocator_ != nullptr) ^ (xla_allocator_.get() != nullptr));
-  }
+        device_allocator_(device_allocator) {}
 
   XlaPlatformInfo& operator=(XlaPlatformInfo&& other) = default;
 
@@ -52,9 +52,11 @@ class XlaPlatformInfo {
     return xla_device_metadata_ && xla_device_metadata_->UseMultipleStreams();
   }
 
-  xla::DeviceMemoryAllocator* allocator() const {
-    return device_allocator_ ? device_allocator_ : xla_allocator_.get();
+  // Non-null only when run on an XLA device.
+  se::DeviceMemoryAllocator* custom_allocator() const {
+    return device_allocator_;
   }
+
   DeviceType device_type() const { return device_type_; }
 
   // This is equal to xla_device_metadata()->platform()->id() if
@@ -78,12 +80,9 @@ class XlaPlatformInfo {
   const XlaDevice::Metadata* xla_device_metadata_;
 
   // If the op associated with this XlaPlatformInfo is placed on an XLA device
-  // then device_allocator_ is the xla::Backend's memory allocator and
-  // xla_allocator_ is null.  If the op is placed on a regular CPU or GPU device
-  // then device_allocator_ is null and xla_allocator_ points to an appropriate
-  // XlaAllocator instance.
-  std::unique_ptr<XlaAllocator> xla_allocator_;
-  xla::DeviceMemoryAllocator* device_allocator_;
+  // then device_allocator_ is the xla::Backend's memory allocator.  If the op
+  // is placed on a regular CPU or GPU device then device_allocator_ is null.
+  se::DeviceMemoryAllocator* device_allocator_;
 
   TF_DISALLOW_COPY_AND_ASSIGN(XlaPlatformInfo);
 };
@@ -96,12 +95,15 @@ class XlaPlatformInfo {
 // in the GraphDef.
 // Currently, it is used by eager runtime. FunctionLibraryRuntime creates
 // this kernel when asked to create a kernel for an XLA-compiled function.
+//
+// `has_ref_vars`: whether the input computation can have reference variables.
+// TODO(cheshire): instead derive this information from the input graph.
 class XlaLocalLaunchBase : public OpKernel {
  public:
   XlaLocalLaunchBase(OpKernelConstruction* ctx,
                      const std::vector<int>& constants,
                      const std::vector<int>& resources,
-                     const NameAttrList& function);
+                     const NameAttrList& function, bool has_ref_vars);
   XlaLocalLaunchBase(const XlaLocalLaunchBase&) = delete;
   XlaLocalLaunchBase& operator=(const XlaLocalLaunchBase&) = delete;
   ~XlaLocalLaunchBase() override = default;
@@ -110,12 +112,14 @@ class XlaLocalLaunchBase : public OpKernel {
 
  protected:
   // Indexes of compile-time constant inputs
-  std::vector<int> constants_;
+  const std::vector<int> constants_;
   // Indexes of resource inputs
-  std::vector<int> resources_;
+  const std::vector<int> resources_;
 
-  NameAttrList function_;
-  XlaPlatformInfo platform_info_;
+  const NameAttrList function_;
+  const XlaPlatformInfo platform_info_;
+
+  bool has_ref_vars_;
 };
 
 // XlaLocalLaunchOp is used to replace a region of the TensorFlow graph
@@ -144,15 +148,27 @@ class XlaCompileOp : public OpKernel {
 
  private:
   // Indexes of compile-time constant inputs
-  std::vector<int> constants_;
+  const std::vector<int> constants_;
   // Indexes of resource inputs
-  std::vector<int> resources_;
+  const std::vector<int> resources_;
 
-  NameAttrList function_;
+  const NameAttrList function_;
 
   XlaPlatformInfo platform_info_;
 
-  bool must_compile_;
+  const bool must_compile_;
+
+  // Whether the graph has TF reference variables.
+  const bool has_ref_vars_;
+
+  // cannot_compile_cluster_ is set to true if XLA returns an Unimplemented
+  // error when compiling the cluster this _XlaCompile is supposed to compile.
+  // If `cannot_compile_cluster_` is true then we avoid compiling this cluster
+  // on any future calls to _XlaCompile.
+  bool cannot_compile_cluster_ TF_GUARDED_BY(cannot_compile_cluster_mu_) =
+      false;
+
+  mutex cannot_compile_cluster_mu_;
 };
 
 class XlaRunOp : public OpKernel {
@@ -162,7 +178,14 @@ class XlaRunOp : public OpKernel {
   void Compute(OpKernelContext* ctx) override;
 
  private:
-  XlaPlatformInfo platform_info_;
+  const XlaPlatformInfo platform_info_;
+};
+
+class XlaMergeOp : public OpKernel {
+ public:
+  explicit XlaMergeOp(OpKernelConstruction* ctx);
+
+  void Compute(OpKernelContext* ctx) override;
 };
 
 }  // namespace tensorflow

@@ -17,13 +17,16 @@ limitations under the License.
 
 #define EIGEN_USE_THREADS
 
-#if GOOGLE_CUDA
+#if (defined(GOOGLE_CUDA) && GOOGLE_CUDA) || \
+    (defined(TENSORFLOW_USE_ROCM) && TENSORFLOW_USE_ROCM)
 #define EIGEN_USE_GPU
 #endif
 
 #include "tensorflow/core/kernels/constant_op.h"
 
 #include "third_party/eigen3/unsupported/Eigen/CXX11/Tensor"
+#include "tensorflow/core/framework/allocator.h"
+#include "tensorflow/core/framework/bounds_check.h"
 #include "tensorflow/core/framework/node_def.pb.h"
 #include "tensorflow/core/framework/register_types.h"
 #include "tensorflow/core/framework/tensor.h"
@@ -32,7 +35,7 @@ limitations under the License.
 #include "tensorflow/core/framework/tensor_types.h"
 #include "tensorflow/core/framework/types.h"
 #include "tensorflow/core/framework/variant_op_registry.h"
-#include "tensorflow/core/kernels/bounds_check.h"
+#include "tensorflow/core/graph/graph_node_util.h"
 #include "tensorflow/core/kernels/fill_functor.h"
 #include "tensorflow/core/platform/macros.h"
 
@@ -44,32 +47,33 @@ namespace tensorflow {
 
 namespace {
 
-std::unique_ptr<const NodeDef> StripTensorDataFromNodeDef(
-    OpKernelConstruction* ctx) {
-#ifndef __ANDROID__
-  DCHECK_EQ(NodeDef::descriptor()->field_count(), 5)
+NodeDef StripTensorDataFromNodeDef(OpKernelConstruction* ctx) {
+#ifndef TENSORFLOW_LITE_PROTOS
+  DCHECK_EQ(NodeDef::descriptor()->field_count(), 6)
       << "The NodeDef format has changed, and the attr-stripping code may need "
       << "to be updated.";
 #endif
   const NodeDef& original = ctx->def();
-  NodeDef* ret = new NodeDef;
-  ret->set_name(original.name());
-  ret->set_op(original.op());
-  ret->set_device(original.device());
+  NodeDef ret;
+  ret.set_name(original.name());
+  ret.set_op(original.op());
+  ret.set_device(original.device());
   // Strip the "value" attr from the returned NodeDef.
   // NOTE(mrry): The present implementation of `OpKernel::OpKernel()` only uses
   // attrs that affect the cardinality of list-typed inputs and outputs, so it
   // is safe to drop other attrs from the NodeDef.
-  AddNodeAttr("dtype", ctx->output_type(0), ret);
-  return std::unique_ptr<const NodeDef>(ret);
+  AddNodeAttr("dtype", ctx->output_type(0), &ret);
+  MergeDebugInfo(original, &ret);
+  return ret;
 }
 
 }  // namespace
 
 ConstantOp::ConstantOp(OpKernelConstruction* ctx)
-    : OpKernel(ctx, StripTensorDataFromNodeDef(ctx)),
+    : OpKernel(ctx, StripTensorDataFromNodeDef(ctx), false),
       tensor_(ctx->output_type(0)) {
   const TensorProto* proto = nullptr;
+  auto op_annotation = ScopedMemoryDebugAnnotation(name_view().data());
   OP_REQUIRES_OK(ctx, ctx->GetAttr("value", &proto));
   OP_REQUIRES_OK(ctx, ctx->device()->MakeTensorFromProto(
                           *proto, AllocatorAttributes(), &tensor_));
@@ -91,7 +95,8 @@ ConstantOp::~ConstantOp() {}
 
 REGISTER_KERNEL_BUILDER(Name("Const").Device(DEVICE_CPU), ConstantOp);
 
-#if GOOGLE_CUDA
+#if (defined(GOOGLE_CUDA) && GOOGLE_CUDA) || \
+    (defined(TENSORFLOW_USE_ROCM) && TENSORFLOW_USE_ROCM)
 #define REGISTER_KERNEL(D, TYPE)                                      \
   REGISTER_KERNEL_BUILDER(                                            \
       Name("Const").Device(DEVICE_##D).TypeConstraint<TYPE>("dtype"), \
@@ -153,13 +158,23 @@ class FillOp : public OpKernel {
 
   void Compute(OpKernelContext* context) override {
     const Tensor& Tdims = context->input(0);
-    OP_REQUIRES(context, IsLegacyVector(Tdims.shape()),
-                errors::InvalidArgument("dims must be a vector, got shape ",
-                                        Tdims.shape().DebugString()));
+    OP_REQUIRES(
+        context,
+        // TODO(rmlarsen): Disallow legacy use of scalars to represent shape.
+        (TensorShapeUtils::IsVector(Tdims.shape()) ||
+         TensorShapeUtils::IsScalar(Tdims.shape())),
+        errors::InvalidArgument("dims must represent a vector, got shape ",
+                                Tdims.shape().DebugString()));
     const Tensor& Tvalue = context->input(1);
-    OP_REQUIRES(context, IsLegacyScalar(Tvalue.shape()),
-                errors::InvalidArgument("value must be a scalar, got shape ",
-                                        Tvalue.shape().DebugString()));
+    OP_REQUIRES(
+        context,
+        // TODO(rmlarsen): Disallow legacy use of length-1 vector to represent
+        // scalar.
+        TensorShapeUtils::IsScalar(Tvalue.shape()) ||
+            (TensorShapeUtils::IsVector(Tvalue.shape()) &&
+             Tvalue.shape().dim_size(0) == 1),
+        errors::InvalidArgument("value must represent a scalar, got shape ",
+                                Tvalue.shape().DebugString()));
     auto dims = Tdims.flat<Index>();
     TensorShape shape;
     OP_REQUIRES_OK(context, TensorShapeUtils::MakeShape(
@@ -193,6 +208,7 @@ TF_CALL_ALL_TYPES(REGISTER_CPU_KERNEL);
 // the conversion from uint8 to quint8.
 REGISTER_KERNEL(CPU, quint8);
 REGISTER_KERNEL(CPU, quint16);
+REGISTER_KERNEL(CPU, uint32);
 #undef REGISTER_CPU_KERNEL
 
 #ifdef TENSORFLOW_USE_SYCL
@@ -215,7 +231,8 @@ REGISTER_KERNEL_BUILDER(Name("Fill")
 #undef REGISTER_KERNEL_SYCL
 #endif  // TENSORFLOW_USE_SYCL
 
-#if GOOGLE_CUDA
+#if (defined(GOOGLE_CUDA) && GOOGLE_CUDA) || \
+    (defined(TENSORFLOW_USE_ROCM) && TENSORFLOW_USE_ROCM)
 REGISTER_KERNEL(GPU, Eigen::half);
 REGISTER_KERNEL(GPU, bfloat16);
 REGISTER_KERNEL(GPU, float);
@@ -261,7 +278,8 @@ class ZerosLikeOp : public OpKernel {
       const Variant& v = input.scalar<Variant>()();
       // DT_VARIANT tensors must be allocated on CPU since they wrap C++
       // objects which can not be efficiently represented in GPU memory.
-      Tensor out(cpu_allocator(), DT_VARIANT, TensorShape({}));
+      int numa_node = ctx->device()->NumaNode();
+      Tensor out(cpu_allocator(numa_node), DT_VARIANT, TensorShape({}));
       Variant* out_v = &(out.scalar<Variant>()());
       OP_REQUIRES_OK(ctx, UnaryOpVariant<Device>(
                               ctx, ZEROS_LIKE_VARIANT_UNARY_OP, v, out_v));
@@ -298,7 +316,8 @@ REGISTER_KERNEL_BUILDER(Name("ZerosLike")
                         ZerosLikeOp<CPUDevice, int32>);
 #endif  // TENSORFLOW_USE_SYCL
 
-#if GOOGLE_CUDA
+#if (defined(GOOGLE_CUDA) && GOOGLE_CUDA) || \
+    (defined(TENSORFLOW_USE_ROCM) && TENSORFLOW_USE_ROCM)
 REGISTER_KERNEL(bool, GPU);
 REGISTER_KERNEL(Eigen::half, GPU);
 REGISTER_KERNEL(bfloat16, GPU);
@@ -313,7 +332,7 @@ REGISTER_KERNEL_BUILDER(Name("ZerosLike")
                             .TypeConstraint<int32>("T")
                             .HostMemory("y"),
                         ZerosLikeOp<CPUDevice, int32>);
-#endif  // GOOGLE_CUDA
+#endif  // GOOGLE_CUDA || TENSORFLOW_USE_ROCM
 
 #undef REGISTER_KERNEL
 
@@ -351,7 +370,8 @@ REGISTER_KERNEL_BUILDER(Name("OnesLike")
                         OnesLikeOp<CPUDevice, int32>);
 #endif  // TENSORFLOW_USE_SYCL
 
-#if GOOGLE_CUDA
+#if (defined(GOOGLE_CUDA) && GOOGLE_CUDA) || \
+    (defined(TENSORFLOW_USE_ROCM) && TENSORFLOW_USE_ROCM)
 REGISTER_KERNEL(bool, GPU);
 REGISTER_KERNEL(Eigen::half, GPU);
 REGISTER_KERNEL(bfloat16, GPU);
@@ -365,7 +385,7 @@ REGISTER_KERNEL_BUILDER(Name("OnesLike")
                             .TypeConstraint<int32>("T")
                             .HostMemory("y"),
                         OnesLikeOp<CPUDevice, int32>);
-#endif  // GOOGLE_CUDA
+#endif  // GOOGLE_CUDA || TENSORFLOW_USE_ROCM
 
 #undef REGISTER_KERNEL
 
@@ -391,17 +411,12 @@ void PlaceholderOp::Compute(OpKernelContext* ctx) {
 REGISTER_KERNEL_BUILDER(Name("Placeholder").Device(DEVICE_CPU), PlaceholderOp);
 REGISTER_KERNEL_BUILDER(Name("PlaceholderV2").Device(DEVICE_CPU),
                         PlaceholderOp);
-// The following GPU kernel registration is used to address the situation that
-// a placeholder is added in a GPU device context and soft placement is false.
-// Since a placeholder should never be executed, adding these GPU kernels has
-// no effect on graph execution.
-REGISTER_KERNEL_BUILDER(Name("Placeholder").Device(DEVICE_GPU), PlaceholderOp);
-REGISTER_KERNEL_BUILDER(Name("PlaceholderV2").Device(DEVICE_GPU),
+// The following GPU/Default kernel registration is used to address the
+// situation that a placeholder is added in a GPU device context and soft
+// placement is false. Since a placeholder should never be executed, adding
+// these GPU kernels has no effect on graph execution.
+REGISTER_KERNEL_BUILDER(Name("Placeholder").Device(DEVICE_DEFAULT),
                         PlaceholderOp);
-
-#if TENSORFLOW_USE_SYCL
-REGISTER_KERNEL_BUILDER(Name("Placeholder").Device(DEVICE_SYCL), PlaceholderOp);
-REGISTER_KERNEL_BUILDER(Name("PlaceholderV2").Device(DEVICE_SYCL),
+REGISTER_KERNEL_BUILDER(Name("PlaceholderV2").Device(DEVICE_DEFAULT),
                         PlaceholderOp);
-#endif  // TENSORFLOW_USE_SYCL
 }  // namespace tensorflow

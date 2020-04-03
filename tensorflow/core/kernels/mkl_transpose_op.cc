@@ -16,21 +16,21 @@ limitations under the License.
 // See docs in ../ops/array_ops.cc.
 
 #if defined(INTEL_MKL)
+
 #define EIGEN_USE_THREADS
 
 #if !defined(INTEL_MKL_DNN_ONLY)
 #include "mkl_trans.h"
 #endif
 
+#include "mkldnn.hpp"
+#include "tensorflow/core/framework/register_types.h"
 #include "tensorflow/core/kernels/transpose_functor.h"
 #include "tensorflow/core/kernels/transpose_op.h"
-
-#ifndef INTEL_MKL_ML_ONLY
-#include "mkldnn.hpp"
+#include "tensorflow/core/util/mkl_types.h"
 #include "tensorflow/core/util/mkl_util.h"
 
 using mkldnn::stream;
-#endif
 
 namespace tensorflow {
 
@@ -106,7 +106,6 @@ static const char kMKLConjugateTranspose = 'C';
 
 #endif  // if !defined(INTEL_MKL_DNN_ONLY)
 
-#ifndef INTEL_MKL_ML_ONLY
 // MKL-DNN based Transpose implementation
 template <typename T>
 Status MKLTransposeND(OpKernelContext* ctx, const Tensor& in, Tensor* out,
@@ -127,7 +126,7 @@ template <typename T>
 Status MKLTransposeND(OpKernelContext* context, const Tensor& in_tensor,
                       Tensor* out_tensor, const gtl::ArraySlice<int32>& perm) {
   try {
-    engine cpu_engine = engine(engine::cpu, 0);
+    engine cpu_engine = engine(ENGINE_CPU, 0);
     MklDnnData<T> in(&cpu_engine);
     MklDnnData<T> out(&cpu_engine);
 
@@ -144,8 +143,20 @@ Status MKLTransposeND(OpKernelContext* context, const Tensor& in_tensor,
     out.SetUsrMem(in_dims, out_strides, out_tensor);
 
     std::vector<primitive> net;
-    net.push_back(in.CreateReorder(in.GetUsrMem(), out.GetUsrMem()));
-    stream(stream::kind::eager).submit(net).wait();
+#ifdef ENABLE_MKLDNN_V1
+    auto* prim = FindOrCreateReorder<T>(in.GetUsrMem(), out.GetUsrMem());
+    net.push_back(*(prim->GetPrimitive()));
+    std::vector<MemoryArgsMap> net_args;
+    net_args.push_back({{MKLDNN_ARG_FROM, *in.GetUsrMem()},
+                        {MKLDNN_ARG_TO, *out.GetUsrMem()}});
+    execute_primitives(net, prim->GetStream(), net_args);
+#else
+    std::shared_ptr<stream> transpose_stream;
+    transpose_stream.reset(new CPU_STREAM(cpu_engine));
+    net.push_back(FindOrCreateReorder<T>(in.GetUsrMem(), out.GetUsrMem()));
+    transpose_stream->submit(net).wait();
+#endif  // ENABLE_MKLDNN_V1
+
     return Status::OK();
   } catch (mkldnn::error& e) {
     string error_msg = "Status: " + std::to_string(e.status) +
@@ -154,7 +165,6 @@ Status MKLTransposeND(OpKernelContext* context, const Tensor& in_tensor,
     return errors::Aborted("Operation received an exception:", error_msg);
   }
 }
-#endif  // #ifndef INTEL_MKL_ML_ONLY
 
 }  // namespace
 
@@ -181,7 +191,6 @@ Status MklTransposeCpuOp::DoTranspose(OpKernelContext* ctx, const Tensor& in,
   }
 #endif
 
-#ifndef INTEL_MKL_ML_ONLY
   // MKL-DNN has limit on the maximum number of dimensions in a tensor.
   // Fallback to Eigen for not supported cases.
   if (in.dims() <= TENSOR_MAX_DIMS) {
@@ -189,12 +198,14 @@ Status MklTransposeCpuOp::DoTranspose(OpKernelContext* ctx, const Tensor& in,
       case DT_FLOAT:
         return MKLTransposeND<float>(ctx, in, out, perm);
         break;
+      case DT_BFLOAT16:
+        return MKLTransposeND<bfloat16>(ctx, in, out, perm);
+        break;
       // TODO(nhasabni): support other types such as INT8.
       default:
         break;
     }
   }
-#endif
 
   // Fallback to eigen if transpose parameters not supported by MKL or MKL-DNN
   typedef Eigen::ThreadPoolDevice CPUDevice;
@@ -227,7 +238,6 @@ Status MklConjugateTransposeCpuOp::DoTranspose(OpKernelContext* ctx,
   }
 #endif
 
-#ifndef INTEL_MKL_ML_ONLY
   // MKL-DNN has limit on the maximum number of dimensions in a tensor.
   // Fallback to Eigen for not supported cases.
   if (in.dims() <= TENSOR_MAX_DIMS) {
@@ -235,18 +245,37 @@ Status MklConjugateTransposeCpuOp::DoTranspose(OpKernelContext* ctx,
       case DT_FLOAT:
         return MKLTransposeND<float>(ctx, in, out, perm);
         break;
+      case DT_BFLOAT16:
+        return MKLTransposeND<bfloat16>(ctx, in, out, perm);
+        break;
       // TODO(nhasabni): support other types such as INT8.
       default:
         break;
     }
   }
-#endif
 
   // Fallback to eigen if transpose parameters not supported by MKL or MKL-DNN
   typedef Eigen::ThreadPoolDevice CPUDevice;
   return ::tensorflow::DoConjugateTranspose(ctx->eigen_device<CPUDevice>(), in,
                                             perm, out);
 }
+
+#define REGISTER(T)                                                           \
+  REGISTER_KERNEL_BUILDER(Name("_MklTranspose")                               \
+                              .Device(DEVICE_CPU)                             \
+                              .TypeConstraint<T>("T")                         \
+                              .HostMemory("perm")                             \
+                              .Label(mkl_op_registry::kMklNameChangeOpLabel), \
+                          MklTransposeCpuOp);                                 \
+  REGISTER_KERNEL_BUILDER(Name("_MklConjugateTranspose")                      \
+                              .Device(DEVICE_CPU)                             \
+                              .TypeConstraint<T>("T")                         \
+                              .HostMemory("perm")                             \
+                              .Label(mkl_op_registry::kMklNameChangeOpLabel), \
+                          MklConjugateTransposeCpuOp);
+
+TF_CALL_ALL_TYPES(REGISTER)
+#undef REGISTER
 
 }  // namespace tensorflow
 

@@ -33,6 +33,8 @@ limitations under the License.
 #include "tensorflow/compiler/xrt/xrt.pb.h"
 #include "tensorflow/compiler/xrt/xrt_compilation_cache.h"
 #include "tensorflow/compiler/xrt/xrt_device.h"
+#include "tensorflow/compiler/xrt/xrt_metrics.h"
+#include "tensorflow/compiler/xrt/xrt_util.h"
 #include "tensorflow/core/framework/op_kernel.h"
 #include "tensorflow/core/framework/resource_mgr.h"
 #include "tensorflow/core/framework/tensor.h"
@@ -40,6 +42,7 @@ limitations under the License.
 #include "tensorflow/core/framework/types.pb.h"
 #include "tensorflow/core/lib/core/refcount.h"
 #include "tensorflow/core/lib/core/status.h"
+#include "tensorflow/core/lib/monitoring/timed.h"
 #include "tensorflow/core/lib/strings/proto_serialization.h"
 #include "tensorflow/core/platform/fingerprint.h"
 #include "tensorflow/core/platform/types.h"
@@ -47,8 +50,6 @@ limitations under the License.
 namespace tensorflow {
 
 namespace {
-
-const int kDefaultCacheSize = 100;
 
 class XRTCompileOp : public OpKernel {
  public:
@@ -67,9 +68,11 @@ class XRTCompileOp : public OpKernel {
 
 Status CompilationCacheKey(const xrt::XLAComputation& computation,
                            string* key) {
-  string serialized;
-  TF_RET_CHECK(SerializeToStringDeterministic(computation, &serialized));
-  uint64 fingerprint = Fingerprint64(serialized);
+  const size_t size = computation.ByteSizeLong();
+  auto serialized = absl::make_unique<char[]>(size);
+  TF_RET_CHECK(
+      SerializeToBufferDeterministic(computation, serialized.get(), size));
+  uint64 fingerprint = Fingerprint64(absl::string_view(serialized.get(), size));
   *key = absl::StrCat(fingerprint);
   return Status::OK();
 }
@@ -92,8 +95,7 @@ Status XRTCompileOp::Compile(OpKernelContext* ctx,
   // We are guaranteed that the underlying device object won't be deleted out
   // from under us, while the ScopedRef is live.
   class XRTGenericDeviceAccessor::ScopedRef device_ref;
-  TF_RETURN_IF_ERROR(
-      XRTGenericDeviceAccessor::InitScopedRef(ctx, 0, &device_ref));
+  TF_RETURN_IF_ERROR(XRTGenericDeviceAccessor::InitScopedRef(ctx, &device_ref));
 
   xla::LocalClient* client = device_ref.client();
 
@@ -108,28 +110,35 @@ Status XRTCompileOp::Compile(OpKernelContext* ctx,
   TF_ASSIGN_OR_RETURN(xla::XlaComputation computation,
                       client->LoadSnapshot(computation_proto.hlo_snapshot()));
 
-  std::vector<const xla::Shape*> argument_layouts(
+  std::vector<xla::Shape> argument_layouts(
+      config.program_shape().parameters_size());
+  std::vector<const xla::Shape*> argument_layout_ptrs(
       config.program_shape().parameters_size());
   for (int i = 0; i < config.program_shape().parameters_size(); ++i) {
-    argument_layouts[i] = &config.program_shape().parameters(i);
+    argument_layouts[i] = xla::Shape(config.program_shape().parameters(i));
+    argument_layout_ptrs[i] = &argument_layouts[i];
   }
   xla::ExecutableBuildOptions build_options;
   build_options.set_device_ordinal(client->default_device_ordinal());
-  build_options.set_result_layout(config.program_shape().result());
+  build_options.set_result_layout(xla::Shape(config.program_shape().result()));
   build_options.set_device_allocator(device_ref.backend()->memory_allocator());
+  if (config.has_debug_options()) {
+    *build_options.mutable_debug_options() =
+        BuildXlaDebugOptions(config.debug_options());
+  }
 
   VLOG(1) << "Building executable";
-  auto compile_result =
-      client->Compile(computation, argument_layouts, build_options);
-  if (!compile_result.ok()) {
-    return compile_result.status();
-  }
-  *program = std::move(compile_result.ValueOrDie());
+  TF_ASSIGN_OR_RETURN(
+      auto executables,
+      client->Compile(computation, argument_layout_ptrs, build_options));
+  TF_RET_CHECK(executables.size() == 1);
+  *program = std::move(executables[0]);
   return Status::OK();
 }
 
 void XRTCompileOp::Compute(OpKernelContext* ctx) {
   VLOG(1) << "XRTCompileOp::Compute";
+  auto timed = monitoring::MakeTimed(xrt_metrics::GetCompileCell());
 
   ResourceMgr* rm;
   OP_REQUIRES_OK(ctx, XRTGenericDeviceAccessor::GetResourceManager(ctx, &rm));
@@ -139,25 +148,19 @@ void XRTCompileOp::Compute(OpKernelContext* ctx) {
               errors::Internal("computation input should be a string scalar"));
 
   xrt::XLAComputation computation_proto;
-  OP_REQUIRES(
-      ctx,
-      computation_proto.ParseFromString(computation_input.scalar<string>()()),
-      errors::InvalidArgument(
-          "Unable to parse computation input to XLAComputation"));
+  OP_REQUIRES(ctx,
+              ParseFromTString(computation_input.scalar<tstring>()(),
+                               &computation_proto),
+              errors::InvalidArgument(
+                  "Unable to parse computation input to XLAComputation"));
 
   string key;
   OP_REQUIRES_OK(ctx, CompilationCacheKey(computation_proto, &key));
 
   // Process-wide cache of XLA executables.
-  XRTCompilationCache* cache;
-  OP_REQUIRES_OK(ctx,
-                 rm->LookupOrCreate<XRTCompilationCache>(
-                     rm->default_container(), kXRTCompilationCacheResourceName,
-                     &cache, [](XRTCompilationCache** new_cache) {
-                       *new_cache = new XRTCompilationCache(kDefaultCacheSize);
-                       return Status::OK();
-                     }));
-  core::ScopedUnref cache_unref(cache);
+  auto cache_or = GetOrCreateCompilationCache(rm, /*max_number_of_entries=*/0);
+  OP_REQUIRES_OK(ctx, cache_or.status());
+  auto cache = cache_or.ConsumeValueOrDie();
 
   int64 uid;
   OP_REQUIRES_OK(
@@ -174,13 +177,14 @@ void XRTCompileOp::Compute(OpKernelContext* ctx) {
   ctx->set_output(0, handle_output);
 
   xla::LocalExecutable* executable = entry->get().get_executable();
-  xla::ProgramShape program_shape = executable->executable()
-                                        ->module()
-                                        .config()
-                                        .entry_computation_layout()
-                                        .ComputeProgramShape();
+  xla::ProgramShapeProto program_shape = executable->executable()
+                                             ->module()
+                                             .config()
+                                             .entry_computation_layout()
+                                             .ComputeProgramShape()
+                                             .ToProto();
   Tensor program_shape_output(DT_STRING, TensorShape({1}));
-  program_shape_output.vec<string>()(0) = program_shape.SerializeAsString();
+  program_shape_output.vec<tstring>()(0) = program_shape.SerializeAsString();
   ctx->set_output(1, program_shape_output);
 }
 
@@ -205,11 +209,7 @@ XRTReleaseCompilationRefOp::~XRTReleaseCompilationRefOp() = default;
 
 void XRTReleaseCompilationRefOp::Compute(OpKernelContext* ctx) {
   VLOG(1) << "XRTReleaseCompilationRefOp::Compute";
-
-  const Tensor& key_tensor = ctx->input(0);
-  OP_REQUIRES(ctx, TensorShapeUtils::IsScalar(key_tensor.shape()),
-              errors::Internal("computation key should be a string scalar"));
-  int64 uid = key_tensor.scalar<int64>()();
+  auto timed = monitoring::MakeTimed(xrt_metrics::GetReleaseCompilationCell());
 
   ResourceMgr* rm;
   OP_REQUIRES_OK(ctx, XRTGenericDeviceAccessor::GetResourceManager(ctx, &rm));
@@ -221,9 +221,13 @@ void XRTReleaseCompilationRefOp::Compute(OpKernelContext* ctx) {
                           kXRTCompilationCacheResourceName, &cache));
   core::ScopedUnref cache_unref(cache);
 
-  OP_REQUIRES_OK(ctx, cache->Release(uid));
-
-  VLOG(2) << "Released computation handle " << uid;
+  const Tensor& keys_tensor = ctx->input(0);
+  auto flat_keys = keys_tensor.flat<int64>();
+  for (int64 i = 0; i < flat_keys.size(); ++i) {
+    int64 key = flat_keys(i);
+    OP_REQUIRES_OK(ctx, cache->Release(key));
+    VLOG(2) << "Released computation handle " << key;
+  }
 }
 
 }  // namespace

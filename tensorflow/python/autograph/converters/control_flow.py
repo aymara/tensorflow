@@ -21,31 +21,35 @@ from __future__ import print_function
 import gast
 
 from tensorflow.python.autograph.core import converter
+from tensorflow.python.autograph.lang import directives
 from tensorflow.python.autograph.pyct import anno
 from tensorflow.python.autograph.pyct import ast_util
 from tensorflow.python.autograph.pyct import parser
 from tensorflow.python.autograph.pyct import templates
 from tensorflow.python.autograph.pyct.static_analysis import annos
+from tensorflow.python.autograph.utils import compat_util
 
 
-class SymbolNamer(object):
-  """Describes the interface for ControlFlowTransformer's namer."""
+# TODO(mdan): Refactor functions to make them smaller.
 
-  def new_symbol(self, name_root, reserved_locals):
-    """Generate a new unique symbol.
 
-    Args:
-      name_root: String, used as stem in the new name.
-      reserved_locals: Set(string), additional local symbols that are reserved
-          and which should not be used.
-    Returns:
-      String.
-    """
-    raise NotImplementedError()
+class _Function(object):
+
+  scope = None
 
 
 class ControlFlowTransformer(converter.Base):
   """Transforms control flow structures like loops an conditionals."""
+
+  def visit_Lambda(self, node):
+    with self.state[_Function] as fn:
+      fn.scope = anno.getanno(node, anno.Static.SCOPE)
+      return self.generic_visit(node)
+
+  def visit_FunctionDef(self, node):
+    with self.state[_Function] as fn:
+      fn.scope = anno.getanno(node, annos.NodeAnno.BODY_SCOPE)
+      return self.generic_visit(node)
 
   def _create_cond_branch(self, body_name, aliased_orig_names,
                           aliased_new_names, body, returns):
@@ -83,62 +87,167 @@ class ControlFlowTransformer(converter.Base):
       return templates.replace(
           template, body_name=body_name, body=body, return_stmt=return_stmt)
 
-  def _create_cond_expr(self, results, test, body_name, orelse_name):
+  def _create_cond_expr(self, results, test, body_name, orelse_name,
+                        state_getter_name, state_setter_name,
+                        basic_symbol_names, composite_symbol_names):
     if results is not None:
       template = """
-        results = ag__.if_stmt(test, body_name, orelse_name)
+        results = ag__.if_stmt(test, body_name, orelse_name,
+                               state_getter_name, state_setter_name,
+                               (basic_symbol_names,),
+                               (composite_symbol_names,))
       """
       return templates.replace(
           template,
           test=test,
           results=results,
           body_name=body_name,
-          orelse_name=orelse_name)
+          orelse_name=orelse_name,
+          state_getter_name=state_getter_name,
+          state_setter_name=state_setter_name,
+          basic_symbol_names=basic_symbol_names,
+          composite_symbol_names=composite_symbol_names)
     else:
       template = """
-        ag__.if_stmt(test, body_name, orelse_name)
+        ag__.if_stmt(test, body_name, orelse_name, getter_name, setter_name,
+                     (basic_symbol_names,), (composite_symbol_names,))
       """
       return templates.replace(
-          template, test=test, body_name=body_name, orelse_name=orelse_name)
+          template,
+          test=test,
+          body_name=body_name,
+          orelse_name=orelse_name,
+          getter_name=state_getter_name,
+          setter_name=state_setter_name,
+          basic_symbol_names=basic_symbol_names,
+          composite_symbol_names=composite_symbol_names)
 
   def _fmt_symbols(self, symbol_set):
     if not symbol_set:
       return 'no variables'
     return ', '.join(map(str, symbol_set))
 
-  def visit_If(self, node):
-    node = self.generic_visit(node)
+  def _determine_aliased_symbols(self, scope, node_defined_in, block):
+    if block:
+      block_live_in = set(anno.getanno(block[0], anno.Static.LIVE_VARS_IN))
+    else:
+      block_live_in = set()
 
+    modified_live = scope.modified & node_defined_in & block_live_in
+    # Composite symbols are handled elsewhere, see _create_state_functions
+    return {
+        s for s in modified_live
+        if not s.is_composite() and s not in self.state[_Function].scope.globals
+    }
+
+  def _create_nonlocal_declarations(self, loop_vars):
+    results = []
+    global_vars = self.state[_Function].scope.globals
+
+    if global_vars:
+      results.append(gast.Global([str(v) for v in global_vars]))
+
+    nonlocal_vars = [
+        v for v in loop_vars if not v.is_composite() and v not in global_vars]
+    if nonlocal_vars:
+      results.append(gast.Nonlocal([str(v) for v in nonlocal_vars]))
+
+    return results
+
+  def _create_state_functions(
+      self, loop_vars, nonlocal_declarations, getter_name, setter_name):
+    if loop_vars:
+      template = """
+        def getter_name():
+          return state_vars,
+        def setter_name(loop_vars):
+          nonlocal_declarations
+          state_vars, = loop_vars
+      """
+      return templates.replace(
+          template,
+          nonlocal_declarations=nonlocal_declarations,
+          getter_name=getter_name,
+          setter_name=setter_name,
+          state_vars=tuple(loop_vars))
+    else:
+      template = """
+        def getter_name():
+          return ()
+        def setter_name(loop_vars):
+          pass
+      """
+      return templates.replace(
+          template, getter_name=getter_name, setter_name=setter_name)
+
+  def _create_loop_options(self, node):
+    if not anno.hasanno(node, anno.Basic.DIRECTIVES):
+      return gast.Dict([], [])
+
+    loop_directives = anno.getanno(node, anno.Basic.DIRECTIVES)
+    if directives.set_loop_options not in loop_directives:
+      return gast.Dict([], [])
+
+    opts_dict = loop_directives[directives.set_loop_options]
+    str_keys, values = zip(*opts_dict.items())
+    keys = [gast.Constant(s, kind=None) for s in str_keys]
+    values = list(values)  # ast and gast don't play well with tuples.
+    return gast.Dict(keys, values)
+
+  def _create_undefined_assigns(self, undefined_symbols):
+    assignments = []
+    for s in undefined_symbols:
+      template = '''
+        var = ag__.Undefined(symbol_name)
+      '''
+      assignments += templates.replace(
+          template,
+          var=s,
+          symbol_name=gast.Constant(s.ssf(), kind=None))
+    return assignments
+
+  def visit_If(self, node):
     body_scope = anno.getanno(node, annos.NodeAnno.BODY_SCOPE)
     orelse_scope = anno.getanno(node, annos.NodeAnno.ORELSE_SCOPE)
     defined_in = anno.getanno(node, anno.Static.DEFINED_VARS_IN)
     live_out = anno.getanno(node, anno.Static.LIVE_VARS_OUT)
 
+    # Note: this information needs to be extracted before the body conversion
+    # that happens in the call to generic_visit below, because the conversion
+    # generates nodes that lack static analysis annotations.
+    need_alias_in_body = self._determine_aliased_symbols(
+        body_scope, defined_in, node.body)
+    need_alias_in_orelse = self._determine_aliased_symbols(
+        orelse_scope, defined_in, node.orelse)
+
+    node = self.generic_visit(node)
+
     modified_in_cond = body_scope.modified | orelse_scope.modified
     returned_from_cond = set()
+    composites = set()
     for s in modified_in_cond:
-      if s in live_out:
+      if s in live_out and not s.is_composite():
         returned_from_cond.add(s)
-      elif s.is_composite():
-        # Special treatment for compound objects: if any of their owner entities
-        # are live, then they are outputs as well.
-        if live_out & s.owner_set:
-          returned_from_cond.add(s)
-
-    need_alias_in_body = body_scope.modified & defined_in
-    need_alias_in_orelse = orelse_scope.modified & defined_in
+      if s.is_composite():
+        # Special treatment for compound objects, always return them.
+        # This allows special handling within the if_stmt itself.
+        # For example, in TensorFlow we need to restore the state of composite
+        # symbols to ensure that only effects from the executed branch are seen.
+        composites.add(s)
 
     created_in_body = body_scope.modified & returned_from_cond - defined_in
     created_in_orelse = orelse_scope.modified & returned_from_cond - defined_in
 
-    if created_in_body != created_in_orelse:
-      raise ValueError(
-          'if statement may not initialize all variables: the true branch'
-          ' creates %s, while the false branch creates %s. Make sure all'
-          ' these variables are initialized either in both'
-          ' branches or before the if statement.' %
-          (self._fmt_symbols(created_in_body),
-           self._fmt_symbols(created_in_orelse)))
+    basic_created_in_body = tuple(
+        s for s in created_in_body if not s.is_composite())
+    basic_created_in_orelse = tuple(
+        s for s in created_in_orelse if not s.is_composite())
+
+    # These variables are defined only in a single branch. This is fine in
+    # Python so we pass them through. Another backend, e.g. Tensorflow, may need
+    # to handle these cases specially or throw an Error.
+    possibly_undefined = (set(basic_created_in_body) ^
+                          set(basic_created_in_orelse))
 
     # Alias the closure variables inside the conditional functions, to allow
     # the functions access to the respective variables.
@@ -160,7 +269,16 @@ class ControlFlowTransformer(converter.Base):
     node_body = ast_util.rename_symbols(node.body, alias_body_map)
     node_orelse = ast_util.rename_symbols(node.orelse, alias_orelse_map)
 
+    cond_var_name = self.ctx.namer.new_symbol('cond', body_scope.referenced)
+    body_name = self.ctx.namer.new_symbol('if_true', body_scope.referenced)
+    orelse_name = self.ctx.namer.new_symbol('if_false', orelse_scope.referenced)
+    all_referenced = body_scope.referenced | orelse_scope.referenced
+    state_getter_name = self.ctx.namer.new_symbol('get_state', all_referenced)
+    state_setter_name = self.ctx.namer.new_symbol('set_state', all_referenced)
+
     returned_from_cond = tuple(returned_from_cond)
+    composites = tuple(composites)
+
     if returned_from_cond:
       if len(returned_from_cond) == 1:
         cond_results = returned_from_cond[0]
@@ -180,14 +298,15 @@ class ControlFlowTransformer(converter.Base):
       # branch functions will return a dummy value that ensures cond
       # actually has some return value as well.
       cond_results = None
-      # TODO(mdan): This doesn't belong here; it's specific to the operator.
-      returned_from_body = (templates.replace_as_expression('tf.constant(1)'),)
-      returned_from_orelse = (
-          templates.replace_as_expression('tf.constant(1)'),)
+      # TODO(mdan): Replace with None once side_effect_guards is retired.
+      returned_from_body = (templates.replace_as_expression(
+          'ag__.match_staging_level(1, cond_var_name)',
+          cond_var_name=cond_var_name),)
+      returned_from_orelse = (templates.replace_as_expression(
+          'ag__.match_staging_level(1, cond_var_name)',
+          cond_var_name=cond_var_name),)
 
-    body_name = self.ctx.namer.new_symbol('if_true', body_scope.referenced)
-    orelse_name = self.ctx.namer.new_symbol('if_false', orelse_scope.referenced)
-
+    cond_assign = self.create_assignment(cond_var_name, node.test)
     body_def = self._create_cond_branch(
         body_name,
         aliased_orig_names=aliased_body_orig_names,
@@ -200,165 +319,215 @@ class ControlFlowTransformer(converter.Base):
         aliased_new_names=aliased_orelse_new_names,
         body=node_orelse,
         returns=returned_from_orelse)
-    cond_expr = self._create_cond_expr(cond_results, node.test, body_name,
-                                       orelse_name)
+    undefined_assigns = self._create_undefined_assigns(possibly_undefined)
+    composite_defs = self._create_state_functions(
+        composites, [], state_getter_name, state_setter_name)
 
-    return body_def + orelse_def + cond_expr
+    basic_symbol_names = tuple(
+        gast.Constant(str(symbol), kind=None) for symbol in returned_from_cond)
+    composite_symbol_names = tuple(
+        gast.Constant(str(symbol), kind=None) for symbol in composites)
 
-  def _get_loop_state(self, node):
+    cond_expr = self._create_cond_expr(cond_results, cond_var_name, body_name,
+                                       orelse_name, state_getter_name,
+                                       state_setter_name, basic_symbol_names,
+                                       composite_symbol_names)
+
+    if_ast = (
+        undefined_assigns + composite_defs + body_def + orelse_def +
+        cond_assign + cond_expr)
+    return if_ast
+
+  def _get_basic_loop_vars(self, modified, live_in, live_out):
+    # The loop variables corresponding to simple symbols (e.g. `x`).
+    basic_loop_vars = []
+    for s in modified:
+      if s.is_composite():
+        # TODO(mdan): Raise an error when this happens for a TF loop.
+        continue
+      # Variables not live into or out of the loop are considered local to the
+      # loop.
+      if s not in live_in and s not in live_out:
+        continue
+      basic_loop_vars.append(s)
+    return frozenset(basic_loop_vars)
+
+  def _get_composite_loop_vars(self, modified, live_in):
+    # The loop variables corresponding to composite symbols (e.g. `self.x`).
+    composite_loop_vars = []
+    for s in modified:
+      if not s.is_composite():
+        continue
+      # Mutations made to objects created inside the loop will appear as writes
+      # to composite symbols. Because these mutations appear as modifications
+      # made to composite symbols, we check whether the composite's parent is
+      # actually live into the loop.
+      # Example:
+      #   while cond:
+      #     x = Foo()
+      #     x.foo = 2 * x.foo  # x.foo is live into the loop, but x is not.
+      #
+      # Note that some parents might not be symbols - for example, in x['foo'],
+      # 'foo' is a parent, but it's a literal, not a symbol. We don't check the
+      # liveness of literals.
+      support_set_symbols = tuple(
+          sss for sss in s.support_set if sss.is_symbol())
+      if not all(sss in live_in for sss in support_set_symbols):
+        continue
+      composite_loop_vars.append(s)
+    return frozenset(composite_loop_vars)
+
+  def _get_loop_vars(self, node, modified):
     body_scope = anno.getanno(node, annos.NodeAnno.BODY_SCOPE)
     defined_in = anno.getanno(node, anno.Static.DEFINED_VARS_IN)
     live_in = anno.getanno(node, anno.Static.LIVE_VARS_IN)
     live_out = anno.getanno(node, anno.Static.LIVE_VARS_OUT)
     reserved_symbols = body_scope.referenced
 
-    # Note that it doesn't matter whether the variables are live after the loop.
-    # If the loop modifies them nonlocally (e.g. the result of an iteration
-    # depends on the previous iteration), then they need to be included in
-    # the loop state, regardless of whether they are later used or not.
-    loop_state = body_scope.modified & live_in
+    basic_loop_vars = self._get_basic_loop_vars(modified, live_in, live_out)
+    composite_loop_vars = self._get_composite_loop_vars(modified, live_in)
+    loop_vars = tuple(basic_loop_vars | composite_loop_vars)
 
-    undefined_lives = loop_state - defined_in
-    # Only simple variables must be defined. The composite ones will be
-    # implicitly checked at runtime.
-    undefined_simple_lives = {v for v in undefined_lives if v.is_simple()}
-    if undefined_simple_lives:
-      raise NameError(
-          'cannot convert loop: it includes symbols that are undefined'
-          ' when entering the loop: {}'.format(
-              self._fmt_symbols(undefined_simple_lives)))
+    # Variable that are used or defined inside the loop, but not defined
+    # before entering the loop. Only simple variables must be defined. The
+    # composite ones will be implicitly checked at runtime.
+    undefined_lives = basic_loop_vars - defined_in
 
-    live_defs_in_loop = (body_scope.modified - live_in) & live_out
-    if live_defs_in_loop:
-      # TODO(mdan): Include reference to explanation why.
-      raise NotImplementedError(
-          'cannot convert loop: it includes symbols that are defined'
-          ' inside the loop, but used later: {}. To fix, initialize'
-          ' these symbols before the loop'.format(
-              self._fmt_symbols(live_defs_in_loop)))
-
-    if not loop_state:
-      # TODO(mdan): Implement this properly.
-      # We need to check whether any variable created inside the body scope
-      # is used before being modified outside the scope. This should be done
-      # during activity analysis, and in general should cover the case where
-      # variables may not be initialized.
-      raise ValueError('cannot convert loop: no outputs')
-
-    return loop_state, reserved_symbols
-
-  def _state_constructs(self, loop_state, reserved_symbols):
-    loop_state = list(loop_state)
-    state_ssf = [
-        self.ctx.namer.new_symbol(s.ssf(), reserved_symbols) for s in loop_state
-    ]
-    ssf_map = {
-        name: ssf
-        for name, ssf in zip(loop_state, state_ssf)
-        if str(name) != ssf
-    }
-
-    if len(loop_state) == 1:
-      loop_state = loop_state[0]
-      state_ssf = state_ssf[0]
-      state_ast_tuple = loop_state
-    else:
-      state_ast_tuple = gast.Tuple([n.ast() for n in loop_state], None)
-
-    return loop_state, state_ssf, state_ast_tuple, ssf_map
+    return loop_vars, reserved_symbols, undefined_lives
 
   def visit_While(self, node):
-    self.generic_visit(node)
+    node = self.generic_visit(node)
+    body_scope = anno.getanno(node, annos.NodeAnno.BODY_SCOPE)
 
-    loop_state, reserved_symbols = self._get_loop_state(node)
+    loop_vars, reserved_symbols, possibly_undefs = self._get_loop_vars(
+        node, body_scope.modified)
 
-    # Note: one might expect we can dispatch based on the loop condition.
-    # But because that is dependent on the state, it cannot be evaluated ahead
-    # of time - doing that would risk duplicating any effects the condition has.
-    # Furthermore, we cannot evaluate slices and attributes, because they might
-    # trigger __getitem__ or __getattribute__.
-    #
-    # A case where this fails includes ops with side effects on a stateful
-    # resource captured in an object:
-    #
-    #   while self.v.read() > 0:
-    #     self.v.assign(1)
-    #
-    # TODO(mdan): Handle the case above.
-    cond_scope = anno.getanno(node, annos.NodeAnno.COND_SCOPE)
-    cond_closure = set()
-    for s in cond_scope.read:
-      cond_closure.update(s.support_set)
-    cond_closure -= loop_state
+    undefined_assigns = self._create_undefined_assigns(possibly_undefs)
 
-    loop_state, state_ssf, state_ast_tuple, ssf_map = self._state_constructs(
-        loop_state, reserved_symbols)
-    node_body = ast_util.rename_symbols(node.body, ssf_map)
-    test = ast_util.rename_symbols(node.test, ssf_map)
+    nonlocal_declarations = self._create_nonlocal_declarations(loop_vars)
+
+    state_getter_name = self.ctx.namer.new_symbol('get_state', reserved_symbols)
+    state_setter_name = self.ctx.namer.new_symbol('set_state', reserved_symbols)
+    state_functions = self._create_state_functions(
+        loop_vars, nonlocal_declarations, state_getter_name, state_setter_name)
+
+    opts = self._create_loop_options(node)
 
     template = """
-      def test_name(state_ssf):
-        return test
-      def body_name(state_ssf):
+      state_functions
+      def body_name():
+        nonlocal_declarations
         body
-        return state_ssf,
-      state_ast_tuple = ag__.while_stmt(
-          test_name, body_name, (state,), (extra_deps,))
+      def test_name():
+        return test
+      undefined_assigns
+      ag__.while_stmt(
+          test_name,
+          body_name,
+          state_getter_name,
+          state_setter_name,
+          (symbol_names,),
+          opts)
     """
-    node = templates.replace(
+    return templates.replace(
         template,
-        state=loop_state,
-        state_ssf=state_ssf,
-        state_ast_tuple=state_ast_tuple,
-        test_name=self.ctx.namer.new_symbol('loop_test', reserved_symbols),
-        test=test,
+        body=node.body,
         body_name=self.ctx.namer.new_symbol('loop_body', reserved_symbols),
-        body=node_body,
-        extra_deps=tuple(s.ast() for s in cond_closure),
-    )
-
-    return node
+        nonlocal_declarations=nonlocal_declarations,
+        opts=opts,
+        state_functions=state_functions,
+        state_getter_name=state_getter_name,
+        state_setter_name=state_setter_name,
+        symbol_names=tuple(gast.Constant(str(s), kind=None) for s in loop_vars),
+        test=node.test,
+        test_name=self.ctx.namer.new_symbol('loop_test', reserved_symbols),
+        undefined_assigns=undefined_assigns)
 
   def visit_For(self, node):
-    self.generic_visit(node)
+    node = self.generic_visit(node)
+    body_scope = anno.getanno(node, annos.NodeAnno.BODY_SCOPE)
+    iter_scope = anno.getanno(node, annos.NodeAnno.ITERATE_SCOPE)
 
-    loop_state, reserved_symbols = self._get_loop_state(node)
-    loop_state, state_ssf, state_ast_tuple, ssf_map = self._state_constructs(
-        loop_state, reserved_symbols)
-    node_body = ast_util.rename_symbols(node.body, ssf_map)
-    if anno.hasanno(node, 'extra_test'):
-      extra_test = anno.getanno(node, 'extra_test')
-      extra_test = ast_util.rename_symbols(extra_test, ssf_map)
+    loop_vars, reserved_symbols, possibly_undefs = self._get_loop_vars(
+        node, body_scope.modified | iter_scope.modified)
+
+    undefined_assigns = self._create_undefined_assigns(possibly_undefs)
+
+    nonlocal_declarations = self._create_nonlocal_declarations(loop_vars)
+
+    state_getter_name = self.ctx.namer.new_symbol('get_state', reserved_symbols)
+    state_setter_name = self.ctx.namer.new_symbol('set_state', reserved_symbols)
+    state_functions = self._create_state_functions(
+        loop_vars, nonlocal_declarations, state_getter_name, state_setter_name)
+
+    opts = self._create_loop_options(node)
+
+    if anno.hasanno(node, anno.Basic.EXTRA_LOOP_TEST):
+      extra_test = anno.getanno(node, anno.Basic.EXTRA_LOOP_TEST)
+      extra_test_name = self.ctx.namer.new_symbol(
+          'extra_test', reserved_symbols)
+      template = """
+        def extra_test_name():
+          nonlocal_declarations
+          return extra_test_expr
+      """
+      extra_test_function = templates.replace(
+          template,
+          extra_test_expr=extra_test,
+          extra_test_name=extra_test_name,
+          loop_vars=loop_vars,
+          nonlocal_declarations=nonlocal_declarations)
     else:
-      extra_test = parser.parse_expression('True')
+      extra_test_name = parser.parse_expression('None')
+      extra_test_function = []
+
+    # iterate_arg_name holds a single arg with the iterates, which may be a
+    # tuple.
+    iterate_arg_name = self.ctx.namer.new_symbol('itr', reserved_symbols)
+    template = """
+      iterates = iterate_arg_name
+    """
+    iterate_expansion = templates.replace(
+        template, iterate_arg_name=iterate_arg_name, iterates=node.target)
 
     template = """
-      def extra_test_name(state_ssf):
-        return extra_test_expr
-      def body_name(loop_vars, state_ssf):
-        # Workaround for PEP-3113
-        iterate = loop_vars
+      state_functions
+      def body_name(iterate_arg_name):
+        nonlocal_declarations
+        iterate_expansion
         body
-        return state_ssf,
-      state_ast_tuple = ag__.for_stmt(
-          iter_, extra_test_name, body_name, (state,))
+      extra_test_function
+      undefined_assigns
+      ag__.for_stmt(
+          iterated,
+          extra_test_name,
+          body_name,
+          state_getter_name,
+          state_setter_name,
+          (symbol_names,),
+          opts)
     """
-    node = templates.replace(
+    return templates.replace(
         template,
-        state=loop_state,
-        state_ssf=state_ssf,
-        state_ast_tuple=state_ast_tuple,
-        iter_=node.iter,
-        iterate=node.target,
-        extra_test_name=self.ctx.namer.new_symbol('extra_test',
-                                                  reserved_symbols),
-        extra_test_expr=extra_test,
+        body=node.body,
         body_name=self.ctx.namer.new_symbol('loop_body', reserved_symbols),
-        body=node_body)
-
-    return node
+        extra_test_function=extra_test_function,
+        extra_test_name=extra_test_name,
+        iterate_arg_name=iterate_arg_name,
+        iterate_expansion=iterate_expansion,
+        iterated=node.iter,
+        nonlocal_declarations=nonlocal_declarations,
+        opts=opts,
+        symbol_names=tuple(gast.Constant(str(s), kind=None) for s in loop_vars),
+        state_functions=state_functions,
+        state_getter_name=state_getter_name,
+        state_setter_name=state_setter_name,
+        undefined_assigns=undefined_assigns)
 
 
 def transform(node, ctx):
-  node = ControlFlowTransformer(ctx).visit(node)
-  return node
+  transformer = ControlFlowTransformer(ctx)
+  return transformer.visit(node)
+
+
+compat_util.deprecated_py2_support(__name__)

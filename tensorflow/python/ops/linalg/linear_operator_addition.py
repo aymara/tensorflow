@@ -23,6 +23,7 @@ import abc
 import six
 
 from tensorflow.python.framework import ops
+from tensorflow.python.framework import tensor_shape
 from tensorflow.python.ops import array_ops
 from tensorflow.python.ops import check_ops
 from tensorflow.python.ops.linalg import linear_operator
@@ -194,14 +195,18 @@ def _static_check_for_same_dimensions(operators):
   if len(operators) < 2:
     return
 
-  domain_dimensions = [(op.name, op.domain_dimension.value) for op in operators
-                       if op.domain_dimension.value is not None]
+  domain_dimensions = [
+      (op.name, tensor_shape.dimension_value(op.domain_dimension))
+      for op in operators
+      if tensor_shape.dimension_value(op.domain_dimension) is not None]
   if len(set(value for name, value in domain_dimensions)) > 1:
     raise ValueError("Operators must have the same domain dimension. Found: %s"
                      % domain_dimensions)
 
-  range_dimensions = [(op.name, op.range_dimension.value) for op in operators
-                      if op.range_dimension.value is not None]
+  range_dimensions = [
+      (op.name, tensor_shape.dimension_value(op.range_dimension))
+      for op in operators
+      if tensor_shape.dimension_value(op.range_dimension) is not None]
   if len(set(value for name, value in range_dimensions)) > 1:
     raise ValueError("Operators must have the same range dimension. Found: %s" %
                      range_dimensions)
@@ -391,6 +396,15 @@ _DIAG_LIKE = {_DIAG, _IDENTITY, _SCALED_IDENTITY}
 _IDENTITY_FAMILY = {_IDENTITY, _SCALED_IDENTITY}
 # operators with an efficient .add_to_tensor() method.
 _EFFICIENT_ADD_TO_TENSOR = _DIAG_LIKE
+
+# Supported LinearOperator classes.
+SUPPORTED_OPERATORS = [
+    linear_operator_diag.LinearOperatorDiag,
+    linear_operator_lower_triangular.LinearOperatorLowerTriangular,
+    linear_operator_full_matrix.LinearOperatorFullMatrix,
+    linear_operator_identity.LinearOperatorIdentity,
+    linear_operator_identity.LinearOperatorScaledIdentity
+]
 
 
 def _type(operator):

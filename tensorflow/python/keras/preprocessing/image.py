@@ -28,9 +28,9 @@ except ImportError:
   pass
 
 from tensorflow.python.keras import backend
-from tensorflow.python.keras import utils
+from tensorflow.python.keras.utils import data_utils
 from tensorflow.python.util import tf_inspect
-from tensorflow.python.util.tf_export import tf_export
+from tensorflow.python.util.tf_export import keras_export
 
 random_rotation = image.random_rotation
 random_shift = image.random_shift
@@ -41,20 +41,32 @@ random_channel_shift = image.random_channel_shift
 apply_brightness_shift = image.apply_brightness_shift
 random_brightness = image.random_brightness
 apply_affine_transform = image.apply_affine_transform
-load_img = image.load_img
 
 
-@tf_export('keras.preprocessing.image.array_to_img')
+@keras_export('keras.preprocessing.image.array_to_img')
 def array_to_img(x, data_format=None, scale=True, dtype=None):
   """Converts a 3D Numpy array to a PIL Image instance.
 
+  Usage:
+
+  ```python
+  from PIL import Image
+  img = np.random.random(size=(100, 100, 3))
+  pil_img = tf.keras.preprocessing.image.array_to_img(img)
+  ```
+
+
   Arguments:
       x: Input Numpy array.
-      data_format: Image data format.
-          either "channels_first" or "channels_last".
-      scale: Whether to rescale image values
-          to be within `[0, 255]`.
-      dtype: Dtype to use.
+      data_format: Image data format, can be either "channels_first" or
+        "channels_last". Defaults to `None`, in which case the global setting
+        `tf.keras.backend.image_data_format()` is used (unless you changed it,
+        it defaults to "channels_last").
+      scale: Whether to rescale image values to be within `[0, 255]`. Defaults
+        to `True`.
+      dtype: Dtype to use. Default to `None`, in which case the global setting
+      `tf.keras.backend.floatx()` is used (unless you changed it, it defaults
+      to "float32")
 
   Returns:
       A PIL Image instance.
@@ -74,15 +86,29 @@ def array_to_img(x, data_format=None, scale=True, dtype=None):
   return image.array_to_img(x, data_format=data_format, scale=scale, **kwargs)
 
 
-@tf_export('keras.preprocessing.image.img_to_array')
+@keras_export('keras.preprocessing.image.img_to_array')
 def img_to_array(img, data_format=None, dtype=None):
   """Converts a PIL Image instance to a Numpy array.
 
+  Usage:
+
+  ```python
+  from PIL import Image
+  img_data = np.random.random(size=(100, 100, 3))
+  img = tf.keras.preprocessing.image.array_to_img(img_data)
+  array = tf.keras.preprocessing.image.img_to_array(img)
+  ```
+
+
   Arguments:
-      img: PIL Image instance.
-      data_format: Image data format,
-          either "channels_first" or "channels_last".
-      dtype: Dtype to use for the returned array.
+      img: Input PIL Image instance.
+      data_format: Image data format, can be either "channels_first" or
+        "channels_last". Defaults to `None`, in which case the global setting
+        `tf.keras.backend.image_data_format()` is used (unless you changed it,
+        it defaults to "channels_last").
+      dtype: Dtype to use. Default to `None`, in which case the global setting
+      `tf.keras.backend.floatx()` is used (unless you changed it, it defaults
+      to "float32")
 
   Returns:
       A 3D Numpy array.
@@ -101,7 +127,7 @@ def img_to_array(img, data_format=None, dtype=None):
   return image.img_to_array(img, data_format=data_format, **kwargs)
 
 
-@tf_export('keras.preprocessing.image.save_img')
+@keras_export('keras.preprocessing.image.save_img')
 def save_img(path,
              x,
              data_format=None,
@@ -131,12 +157,50 @@ def save_img(path,
                  scale=scale, **kwargs)
 
 
-@tf_export('keras.preprocessing.image.Iterator')
-class Iterator(image.Iterator, utils.Sequence):
+def load_img(path, grayscale=False, color_mode='rgb', target_size=None,
+             interpolation='nearest'):
+  """Loads an image into PIL format.
+
+  Usage:
+
+  ```
+  image = tf.keras.preprocessing.image.load_img(image_path)
+  input_arr = keras.preprocessing.image.img_to_array(image)
+  input_arr = np.array([input_arr])  # Convert single image to a batch.
+  predictions = model.predict(input_arr)
+  ```
+
+  Arguments:
+      path: Path to image file.
+      grayscale: DEPRECATED use `color_mode="grayscale"`.
+      color_mode: One of "grayscale", "rgb", "rgba". Default: "rgb".
+          The desired image format.
+      target_size: Either `None` (default to original size)
+          or tuple of ints `(img_height, img_width)`.
+      interpolation: Interpolation method used to resample the image if the
+          target size is different from that of the loaded image.
+          Supported methods are "nearest", "bilinear", and "bicubic".
+          If PIL version 1.1.3 or newer is installed, "lanczos" is also
+          supported. If PIL version 3.4.0 or newer is installed, "box" and
+          "hamming" are also supported. By default, "nearest" is used.
+
+  Returns:
+      A PIL Image instance.
+
+  Raises:
+      ImportError: if PIL is not available.
+      ValueError: if interpolation method is not supported.
+  """
+  return image.load_img(path, grayscale=grayscale, color_mode=color_mode,
+                        target_size=target_size, interpolation=interpolation)
+
+
+@keras_export('keras.preprocessing.image.Iterator')
+class Iterator(image.Iterator, data_utils.Sequence):
   pass
 
 
-@tf_export('keras.preprocessing.image.DirectoryIterator')
+@keras_export('keras.preprocessing.image.DirectoryIterator')
 class DirectoryIterator(image.DirectoryIterator, Iterator):
   """Iterator capable of reading images from a directory on disk.
 
@@ -227,7 +291,7 @@ class DirectoryIterator(image.DirectoryIterator, Iterator):
         **kwargs)
 
 
-@tf_export('keras.preprocessing.image.NumpyArrayIterator')
+@keras_export('keras.preprocessing.image.NumpyArrayIterator')
 class NumpyArrayIterator(image.NumpyArrayIterator, Iterator):
   """Iterator yielding data from a Numpy array.
 
@@ -291,7 +355,7 @@ class NumpyArrayIterator(image.NumpyArrayIterator, Iterator):
         **kwargs)
 
 
-@tf_export('keras.preprocessing.image.ImageDataGenerator')
+@keras_export('keras.preprocessing.image.ImageDataGenerator')
 class ImageDataGenerator(image.ImageDataGenerator):
   """Generate batches of tensor image data with real-time data augmentation.
 
@@ -351,7 +415,7 @@ class ImageDataGenerator(image.ImageDataGenerator):
           If None or 0, no rescaling is applied,
           otherwise we multiply the data by the value provided
           (after applying all other transformations).
-      preprocessing_function: function that will be implied on each input.
+      preprocessing_function: function that will be applied on each input.
           The function will run after the image is resized and augmented.
           The function should take one argument:
           one image (Numpy tensor with rank 3),
@@ -518,16 +582,17 @@ class ImageDataGenerator(image.ImageDataGenerator):
         validation_split=validation_split,
         **kwargs)
 
-tf_export('keras.preprocessing.image.random_rotation')(random_rotation)
-tf_export('keras.preprocessing.image.random_shift')(random_shift)
-tf_export('keras.preprocessing.image.random_shear')(random_shear)
-tf_export('keras.preprocessing.image.random_zoom')(random_zoom)
-tf_export('keras.preprocessing.image.apply_channel_shift')(apply_channel_shift)
-tf_export(
+keras_export('keras.preprocessing.image.random_rotation')(random_rotation)
+keras_export('keras.preprocessing.image.random_shift')(random_shift)
+keras_export('keras.preprocessing.image.random_shear')(random_shear)
+keras_export('keras.preprocessing.image.random_zoom')(random_zoom)
+keras_export(
+    'keras.preprocessing.image.apply_channel_shift')(apply_channel_shift)
+keras_export(
     'keras.preprocessing.image.random_channel_shift')(random_channel_shift)
-tf_export(
+keras_export(
     'keras.preprocessing.image.apply_brightness_shift')(apply_brightness_shift)
-tf_export('keras.preprocessing.image.random_brightness')(random_brightness)
-tf_export(
+keras_export('keras.preprocessing.image.random_brightness')(random_brightness)
+keras_export(
     'keras.preprocessing.image.apply_affine_transform')(apply_affine_transform)
-tf_export('keras.preprocessing.image.load_img')(load_img)
+keras_export('keras.preprocessing.image.load_img')(load_img)

@@ -18,7 +18,7 @@ limitations under the License.
 #include <string>
 #include <vector>
 
-#include "external/coremltools/mlmodel/format/Model.pb.h"
+#include "mlmodel/format/Model.pb.h"
 
 // Data for input/output tensors.
 struct TensorData {
@@ -45,4 +45,5 @@ struct TensorData {
 @property MLModel* model API_AVAILABLE(ios(11));
 @property NSString* mlModelFilePath;
 @property NSString* compiledModelFilePath;
+@property(nonatomic, readonly) int coreMlVersion;
 @end

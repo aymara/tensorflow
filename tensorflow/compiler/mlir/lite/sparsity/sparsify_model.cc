@@ -25,6 +25,7 @@ limitations under the License.
 #include "tensorflow/compiler/mlir/lite/common/tfl_pass_config.h"
 #include "tensorflow/compiler/mlir/lite/flatbuffer_export.h"
 #include "tensorflow/compiler/mlir/lite/flatbuffer_import.h"
+#include "tensorflow/compiler/mlir/lite/transforms/passes.h"
 #include "tensorflow/compiler/mlir/lite/utils/convert_type.h"
 #include "tensorflow/compiler/mlir/tensorflow/utils/error_util.h"
 #include "tensorflow/core/framework/types.pb.h"
@@ -56,7 +57,8 @@ TfLiteStatus SparsifyModel(const tflite::ModelT& input_model,
     return kTfLiteError;
   }
 
-  PassManager pm(module->getContext());
+  PassManager pm(module->getContext(), OpPassManager::Nesting::Implicit);
+  pm.addPass(TFL::CreateDenseToSparsePass());
 
   if (failed(pm.run(module.get()))) {
     const std::string& err = statusHandler.ConsumeStatus().error_message();

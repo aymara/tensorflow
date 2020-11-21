@@ -25,6 +25,7 @@ limitations under the License.
 
 #include "absl/strings/substitute.h"
 #include "tensorflow/lite/delegates/gpu/common/data_type.h"
+#include "tensorflow/lite/delegates/gpu/common/gpu_info.h"
 #include "tensorflow/lite/delegates/gpu/common/model.h"
 #include "tensorflow/lite/delegates/gpu/common/operations.h"
 #include "tensorflow/lite/delegates/gpu/common/shape.h"
@@ -32,7 +33,6 @@ limitations under the License.
 #include "tensorflow/lite/delegates/gpu/common/util.h"
 #include "tensorflow/lite/delegates/gpu/common/winograd_util.h"
 #include "tensorflow/lite/delegates/gpu/metal/compute_task_descriptor.h"
-#include "tensorflow/lite/delegates/gpu/metal/environment.h"
 #include "tensorflow/lite/delegates/gpu/metal/runtime_options.h"
 
 namespace tflite {
@@ -72,7 +72,7 @@ struct ConvParams {
 namespace {
 
 int GetNumOutputSlices(int dst_channels) {
-  const int dst_depth = IntegralDivideRoundUp(dst_channels, 4);
+  const int dst_depth = DivideRoundUp(dst_channels, 4);
   if (dst_depth % 4 == 0 || dst_depth >= 16) {
     return 4;
   } else if (dst_depth % 2 == 0 || dst_depth >= 4) {
@@ -571,8 +571,8 @@ kernel void ComputeFunction(
 std::vector<float> ReorderWeightsForConv(
     const tflite::gpu::Tensor<OHWI, DataType::FLOAT32>& weights,
     const ConvParams& params) {
-  const int dst_depth = IntegralDivideRoundUp(weights.shape.o, 4);
-  const int src_depth = IntegralDivideRoundUp(weights.shape.i, 4);
+  const int dst_depth = DivideRoundUp(weights.shape.o, 4);
+  const int src_depth = DivideRoundUp(weights.shape.i, 4);
   std::vector<float> weights_reordered(
       weights.shape.w * weights.shape.h *
       AlignByN(dst_depth, params.block_size.z) * 4 * src_depth * 4);
@@ -580,8 +580,7 @@ std::vector<float> ReorderWeightsForConv(
   bool isO4I4 = params.weight_layout == WeightsInnerBlockLayout::O4I4;
 
   int counter = 0;
-  for (int d = 0; d < IntegralDivideRoundUp(dst_depth, params.block_size.z);
-       ++d) {
+  for (int d = 0; d < DivideRoundUp(dst_depth, params.block_size.z); ++d) {
     for (int y = 0; y < weights.shape.h; ++y) {
       for (int x = 0; x < weights.shape.w; ++x) {
         for (int s = 0; s < src_depth; ++s) {
@@ -618,17 +617,17 @@ std::vector<uint8_t> GetUniformBuffer(const BHWC& src_size,
                                       const BHWC& dst_size,
                                       const Convolution2DAttributes& attr,
                                       const ConvParams& params) {
-  const int grid_x = IntegralDivideRoundUp(dst_size.w, params.block_size.x);
-  const int grid_y = IntegralDivideRoundUp(dst_size.h, params.block_size.y);
+  const int grid_x = DivideRoundUp(dst_size.w, params.block_size.x);
+  const int grid_y = DivideRoundUp(dst_size.h, params.block_size.y);
   std::vector<int> uniform_params = {
       src_size.w,
       src_size.h,
       src_size.w * src_size.h,
-      IntegralDivideRoundUp(src_size.c, 4),
+      DivideRoundUp(src_size.c, 4),
       dst_size.w,
       dst_size.h,
       dst_size.w * dst_size.h,
-      IntegralDivideRoundUp(dst_size.c, 4),
+      DivideRoundUp(dst_size.c, 4),
       attr.strides.w,
       attr.strides.h,
       -attr.padding.prepended.w,
@@ -652,17 +651,17 @@ std::vector<uint8_t> GetUniformBuffer(const BHWC& src_size,
 std::vector<uint8_t> GetUniformBufferForWinograd(const BHWC& src_size,
                                                  const BHWC& dst_size,
                                                  const ConvParams& params) {
-  const int grid_x = IntegralDivideRoundUp(dst_size.w, params.block_size.x);
-  const int grid_y = IntegralDivideRoundUp(dst_size.h, params.block_size.y);
+  const int grid_x = DivideRoundUp(dst_size.w, params.block_size.x);
+  const int grid_y = DivideRoundUp(dst_size.h, params.block_size.y);
   std::vector<int> uniform_params = {
       src_size.w,
       src_size.h,
       src_size.w * src_size.h,
-      IntegralDivideRoundUp(src_size.c, 4),
+      DivideRoundUp(src_size.c, 4),
       dst_size.w,
       dst_size.h,
       dst_size.w * dst_size.h,
-      IntegralDivideRoundUp(dst_size.c, 4),
+      DivideRoundUp(dst_size.c, 4),
       1,
       1,
       0,
@@ -685,38 +684,37 @@ std::vector<uint8_t> GetUniformBufferForWinograd(const BHWC& src_size,
 
 int GetGroupsCount(const BHWC& dst_shape, const int3& wg_size,
                    const int3& block_size) {
-  const int dst_slices = IntegralDivideRoundUp(dst_shape.c, 4);
+  const int dst_slices = DivideRoundUp(dst_shape.c, 4);
 
-  int grid_x = IntegralDivideRoundUp(dst_shape.w, block_size.x);
-  int grid_y = IntegralDivideRoundUp(dst_shape.h, block_size.y);
-  int grid_z = IntegralDivideRoundUp(dst_slices, block_size.z);
+  int grid_x = DivideRoundUp(dst_shape.w, block_size.x);
+  int grid_y = DivideRoundUp(dst_shape.h, block_size.y);
+  int grid_z = DivideRoundUp(dst_slices, block_size.z);
 
-  return IntegralDivideRoundUp(grid_x, wg_size.x) *
-         IntegralDivideRoundUp(grid_y, wg_size.y) *
-         IntegralDivideRoundUp(grid_z, wg_size.z);
+  return DivideRoundUp(grid_x, wg_size.x) * DivideRoundUp(grid_y, wg_size.y) *
+         DivideRoundUp(grid_z, wg_size.z);
 }
 
 int GetGroupsCountForLinearWH(const BHWC& dst_shape, const int3& wg_size,
                               const int3& block_size) {
-  const int dst_slices = IntegralDivideRoundUp(dst_shape.c, 4);
+  const int dst_slices = DivideRoundUp(dst_shape.c, 4);
 
-  int grid_x = IntegralDivideRoundUp(dst_shape.w, block_size.x);
-  int grid_y = IntegralDivideRoundUp(dst_shape.h, block_size.y);
-  int grid_z = IntegralDivideRoundUp(dst_slices, block_size.z);
+  int grid_x = DivideRoundUp(dst_shape.w, block_size.x);
+  int grid_y = DivideRoundUp(dst_shape.h, block_size.y);
+  int grid_z = DivideRoundUp(dst_slices, block_size.z);
 
-  return IntegralDivideRoundUp(grid_x * grid_y, wg_size.x) *
-         IntegralDivideRoundUp(grid_z, wg_size.y);
+  return DivideRoundUp(grid_x * grid_y, wg_size.x) *
+         DivideRoundUp(grid_z, wg_size.y);
 }
 
 int GetGroupsCountForLinearWHS(const BHWC& dst_shape, const int3& wg_size,
                                const int3& block_size) {
-  const int dst_slices = IntegralDivideRoundUp(dst_shape.c, 4);
+  const int dst_slices = DivideRoundUp(dst_shape.c, 4);
 
-  int grid_x = IntegralDivideRoundUp(dst_shape.w, block_size.x);
-  int grid_y = IntegralDivideRoundUp(dst_shape.h, block_size.y);
-  int grid_z = IntegralDivideRoundUp(dst_slices, block_size.z);
+  int grid_x = DivideRoundUp(dst_shape.w, block_size.x);
+  int grid_y = DivideRoundUp(dst_shape.h, block_size.y);
+  int grid_z = DivideRoundUp(dst_slices, block_size.z);
 
-  return IntegralDivideRoundUp(grid_x * grid_y * grid_z, wg_size.x);
+  return DivideRoundUp(grid_x * grid_y * grid_z, wg_size.x);
 }
 
 bool IsKernelXIs1(const Convolution2DAttributes& attr) {
@@ -731,7 +729,7 @@ bool IsKernelYIs1(const Convolution2DAttributes& attr) {
          attr.padding.appended.h == 0;
 }
 
-int GetMaximumPossibleWavesCount(const AppleGPUInfo& apple_info,
+int GetMaximumPossibleWavesCount(const AppleInfo& apple_info,
                                  const BHWC& dst_shape) {
   if (apple_info.IsLocalMemoryPreferredOverGlobal()) {
     return GetGroupsCountForLinearWH(dst_shape, {32, 1, 1}, {1, 1, 1});
@@ -740,7 +738,7 @@ int GetMaximumPossibleWavesCount(const AppleGPUInfo& apple_info,
   }
 }
 
-int GetRecommendedBlockSize(const AppleGPUInfo& apple_info,
+int GetRecommendedBlockSize(const AppleInfo& apple_info,
                             const BHWC& dst_shape) {
   const int max_waves = GetMaximumPossibleWavesCount(apple_info, dst_shape);
   const int cu_count = apple_info.GetComputeUnitsCount();
@@ -755,11 +753,11 @@ int GetRecommendedBlockSize(const AppleGPUInfo& apple_info,
   }
 }
 
-ConvParams GetConvParamsForA7A8(const AppleGPUInfo& apple_info,
+ConvParams GetConvParamsForA7A8(const AppleInfo& apple_info,
                                 const Convolution2DAttributes& attr,
                                 const BHWC& dst_shape) {
-  const int dst_slices = IntegralDivideRoundUp(dst_shape.c, 4);
-  const int src_slices = IntegralDivideRoundUp(attr.weights.shape.i, 4);
+  const int dst_slices = DivideRoundUp(dst_shape.c, 4);
+  const int src_slices = DivideRoundUp(attr.weights.shape.i, 4);
 
   ConvParams params;
   params.weights_upload_type = WeightsUploadType::LOCAL_MEM_BY_THREADS;
@@ -832,11 +830,11 @@ ConvParams GetConvParamsForA7A8(const AppleGPUInfo& apple_info,
   return params;
 }
 
-ConvParams GetConvParamsForA9AndHigher(const AppleGPUInfo& apple_info,
+ConvParams GetConvParamsForA9AndHigher(const AppleInfo& apple_info,
                                        const Convolution2DAttributes& attr,
                                        const BHWC& dst_shape) {
-  const int dst_slices = IntegralDivideRoundUp(dst_shape.c, 4);
-  const int src_slices = IntegralDivideRoundUp(attr.weights.shape.i, 4);
+  const int dst_slices = DivideRoundUp(dst_shape.c, 4);
+  const int src_slices = DivideRoundUp(attr.weights.shape.i, 4);
   int blk_total_size = GetRecommendedBlockSize(apple_info, dst_shape);
   int3 block_size = int3(1, 1, 1);
   if (blk_total_size >= 2 && apple_info.IsBionic()) {
@@ -917,8 +915,8 @@ ConvParams GetConvParamsForA9AndHigher(const AppleGPUInfo& apple_info,
 ConvParams GetConvParamsForIntel(const Convolution2DAttributes& attr,
                                  const RuntimeOptions& options,
                                  const BHWC& dst_shape) {
-  const int dst_slices = IntegralDivideRoundUp(dst_shape.c, 4);
-  const int src_slices = IntegralDivideRoundUp(attr.weights.shape.i, 4);
+  const int dst_slices = DivideRoundUp(dst_shape.c, 4);
+  const int src_slices = DivideRoundUp(attr.weights.shape.i, 4);
   ConvParams params;
   params.weights_upload_type = WeightsUploadType::PRIVATE_MEM_SIMD8_BROADCAST;
   params.x_kernel_is_1 = IsKernelXIs1(attr);
@@ -982,19 +980,18 @@ ConvParams GetConvParamsForAMD(const Convolution2DAttributes& attr,
   return params;
 }
 
-ConvParams GetConvParams(const DeviceInfo& device_info,
+ConvParams GetConvParams(const GpuInfo& gpu_info,
                          const Convolution2DAttributes& attr,
                          const RuntimeOptions& options, const BHWC& dst_shape) {
-  if (device_info.IsAppleGPU()) {
-    if (device_info.apple_info.IsLocalMemoryPreferredOverGlobal()) {
-      return GetConvParamsForA7A8(device_info.apple_info, attr, dst_shape);
+  if (gpu_info.IsApple()) {
+    if (gpu_info.apple_info.IsLocalMemoryPreferredOverGlobal()) {
+      return GetConvParamsForA7A8(gpu_info.apple_info, attr, dst_shape);
     } else {
-      return GetConvParamsForA9AndHigher(device_info.apple_info, attr,
-                                         dst_shape);
+      return GetConvParamsForA9AndHigher(gpu_info.apple_info, attr, dst_shape);
     }
-  } else if (device_info.IsIntelGPU()) {
+  } else if (gpu_info.IsIntel()) {
     return GetConvParamsForIntel(attr, options, dst_shape);
-  } else if (device_info.IsAMDGPU()) {
+  } else if (gpu_info.IsAMD()) {
     return GetConvParamsForAMD(attr, options, dst_shape);
   } else {
     ConvParams params;
@@ -1017,29 +1014,28 @@ ConvParams GetConvParams(const DeviceInfo& device_info,
 
 std::pair<uint3, uint3> GetDispatchSizes(const ConvParams& params,
                                          const BHWC& shape) {
-  const int dst_slices = IntegralDivideRoundUp(shape.c, 4);
+  const int dst_slices = DivideRoundUp(shape.c, 4);
 
-  int grid_x = IntegralDivideRoundUp(shape.w, params.block_size.x);
-  int grid_y = IntegralDivideRoundUp(shape.h, params.block_size.y);
-  int grid_z = IntegralDivideRoundUp(dst_slices, params.block_size.z);
+  int grid_x = DivideRoundUp(shape.w, params.block_size.x);
+  int grid_y = DivideRoundUp(shape.h, params.block_size.y);
+  int grid_z = DivideRoundUp(dst_slices, params.block_size.z);
 
   const uint3 group_size(params.work_group_size.x, params.work_group_size.y,
                          params.work_group_size.z);
   int3 wg;
   uint3 groups_count;
   if (params.linear_whs) {
-    wg.x = IntegralDivideRoundUp(grid_x * grid_y * grid_z,
-                                 params.work_group_size.x);
+    wg.x = DivideRoundUp(grid_x * grid_y * grid_z, params.work_group_size.x);
     groups_count = uint3(wg.x, 1, 1);
   } else if (params.linear_wh) {
-    wg.x = IntegralDivideRoundUp(grid_x * grid_y, params.work_group_size.x);
-    wg.y = IntegralDivideRoundUp(grid_z, params.work_group_size.y);
+    wg.x = DivideRoundUp(grid_x * grid_y, params.work_group_size.x);
+    wg.y = DivideRoundUp(grid_z, params.work_group_size.y);
     groups_count = uint3(wg[params.work_group_launch_order.x],
                          wg[params.work_group_launch_order.y], 1);
   } else {
-    wg.x = IntegralDivideRoundUp(grid_x, params.work_group_size.x);
-    wg.y = IntegralDivideRoundUp(grid_y, params.work_group_size.y);
-    wg.z = IntegralDivideRoundUp(grid_z, params.work_group_size.z);
+    wg.x = DivideRoundUp(grid_x, params.work_group_size.x);
+    wg.y = DivideRoundUp(grid_y, params.work_group_size.y);
+    wg.z = DivideRoundUp(grid_z, params.work_group_size.z);
     groups_count = uint3(wg[params.work_group_launch_order.x],
                          wg[params.work_group_launch_order.y],
                          wg[params.work_group_launch_order.z]);
@@ -1051,9 +1047,9 @@ std::pair<uint3, uint3> GetDispatchSizes(const ConvParams& params,
 
 std::vector<ComputeTaskDescriptorPtr> ConvolutionGeneric(
     int id, ValueId input_id, ValueId output_id, const BHWC& dst_shape,
-    const Convolution2DAttributes& attr, const DeviceInfo& device_info,
+    const Convolution2DAttributes& attr, const GpuInfo& gpu_info,
     const metal::RuntimeOptions& options) {
-  ConvParams params = GetConvParams(device_info, attr, options, dst_shape);
+  ConvParams params = GetConvParams(gpu_info, attr, options, dst_shape);
 
   auto desc = std::make_shared<ComputeTaskDescriptor>();
   desc->id = id;
@@ -1076,7 +1072,7 @@ std::vector<ComputeTaskDescriptorPtr> ConvolutionGeneric(
   std::string addr_space =
       params.weights_upload_type == WeightsUploadType::CONSTANT_MEM ? "constant"
                                                                     : "device";
-  const int dst_depth = IntegralDivideRoundUp(attr.weights.shape.o, 4);
+  const int dst_depth = DivideRoundUp(attr.weights.shape.o, 4);
   desc->immutable_buffers = {
       {addr_space + " FLT4* const filters",
        GetByteBufferConverted(weights_reordered, options.storage_precision)},
@@ -1106,9 +1102,9 @@ std::vector<ComputeTaskDescriptorPtr> ConvolutionGeneric(
 
 std::vector<ComputeTaskDescriptorPtr> ConvolutionWino4x4To6x6(
     int id, ValueId input_id, ValueId output_id, const BHWC& dst_shape,
-    const Convolution2DAttributes& attr, const DeviceInfo& device_info,
+    const Convolution2DAttributes& attr, const GpuInfo& gpu_info,
     const RuntimeOptions& options) {
-  const int dst_slices = IntegralDivideRoundUp(attr.weights.shape.o, 4);
+  const int dst_slices = DivideRoundUp(attr.weights.shape.o, 4);
   ConvParams params;
   params.work_group_launch_order = int3(2, 0, 1);
   params.src_depth_loop_size = 1;
@@ -1119,9 +1115,9 @@ std::vector<ComputeTaskDescriptorPtr> ConvolutionWino4x4To6x6(
   params.different_weights_for_height = true;
   params.x_kernel_is_1 = true;
   params.y_kernel_is_1 = true;
-  if (device_info.IsAppleGPU()) {
+  if (gpu_info.IsApple()) {
     params.weight_layout = WeightsInnerBlockLayout::O4I4;
-    if (device_info.apple_info.IsLocalMemoryPreferredOverGlobal()) {
+    if (gpu_info.apple_info.IsLocalMemoryPreferredOverGlobal()) {
       params.weights_upload_type = WeightsUploadType::LOCAL_MEM_BY_THREADS;
       params.work_group_size = int3(32, 1, 1);
       params.block_size = int3(4, 1, 4);
@@ -1130,12 +1126,12 @@ std::vector<ComputeTaskDescriptorPtr> ConvolutionWino4x4To6x6(
       params.work_group_size = int3(8, 4, 1);
       params.block_size = int3(4, 1, 4);
     }
-  } else if (device_info.IsIntelGPU()) {
+  } else if (gpu_info.IsIntel()) {
     params.weight_layout = WeightsInnerBlockLayout::I4O4;
     params.weights_upload_type = WeightsUploadType::PRIVATE_MEM_SIMD8_BROADCAST;
     params.work_group_size = int3(16, 1, 1);
     params.block_size = int3(1, 1, 4);
-  } else if (device_info.IsAMDGPU()) {
+  } else if (gpu_info.IsAMD()) {
     params.weight_layout = WeightsInnerBlockLayout::I4O4;
     params.weights_upload_type = WeightsUploadType::GLOBAL_MEM;
     params.work_group_size = int3(32, 1, 1);

@@ -16,6 +16,7 @@ limitations under the License.
 #include "tensorflow/compiler/xla/service/gpu/nccl_all_reduce_thunk.h"
 
 #include <chrono>  // NOLINT (required by TF interfaces)
+#include <cstdlib>
 #include <memory>
 #include <string>
 #include <utility>
@@ -84,6 +85,11 @@ namespace gpu {
 namespace {
 
 using tensorflow::BlockingCounter;
+
+bool IsGlobalNcclConfig() {
+  static bool global_nccl_config = std::getenv("NCCL_COMM_ID") != nullptr;
+  return global_nccl_config;
+}
 
 // Functions to translate an ncclResult_t/cudaError_t to a Status object.  Used
 // by the macros below.
@@ -285,7 +291,6 @@ class NcclClique {
     std::vector<ncclComm_t> raw_comms(local_device_ordinals_.size(), nullptr);
     TF_ASSIGN_OR_RETURN(const absl::optional<std::string>& nccl_id_string,
                         maybe_nccl_unique_id);
-
     ncclUniqueId nccl_id;
     if (nccl_id_string) {
       TF_RETURN_IF_ERROR(StringToNcclUniqueId(*nccl_id_string, &nccl_id));
@@ -346,14 +351,16 @@ RefcountingHashMap<NcclCliqueKey, NcclClique>& GlobalNcclCliqueMap() {
   return m;
 }
 
-class RendezvousNcclAllReduce : public Rendezvous<std::shared_ptr<NcclClique>> {
+using RendezvousBase =
+    Rendezvous<AllReduceParticipantData, std::shared_ptr<NcclClique>>;
+class RendezvousNcclAllReduce : public RendezvousBase {
  public:
   explicit RendezvousNcclAllReduce(const RendezvousKey& k)
-      : Rendezvous<std::shared_ptr<NcclClique>>(k) {}
+      : RendezvousBase(k) {}
 
  protected:
-  StatusOr<std::pair<std::shared_ptr<NcclClique>, bool>> SubmitParticipantImpl(
-      AllReduceParticipantData participant) override;
+  StatusOr<ParticipantImplOutput> RunCollectiveOp(
+      const AllReduceParticipantData& participant) override;
 
   void CleanupImpl(std::shared_ptr<NcclClique> handle,
                    bool is_primary) override;
@@ -372,9 +379,9 @@ GlobalRendezvousMap() {
   return m;
 }
 
-StatusOr<std::pair<std::shared_ptr<NcclClique>, bool>>
-RendezvousNcclAllReduce::SubmitParticipantImpl(
-    AllReduceParticipantData participant) {
+StatusOr<RendezvousNcclAllReduce::ParticipantImplOutput>
+RendezvousNcclAllReduce::RunCollectiveOp(
+    const AllReduceParticipantData& participant) {
   // We pull into our thread a) the communication handle and b) whether we're
   // the "primary" thread for this rendezvous -- the "primary" thread has some
   // additional responsibilities for setup/teardown.
@@ -414,10 +421,12 @@ RendezvousNcclAllReduce::SubmitParticipantImpl(
         nccl_unique_id = (*participant.nccl_unique_id_callback)(clique_key);
       } else {
         if (participant.rendezvous_key.global_devices.size() !=
-            participant.rendezvous_key.num_local_participants) {
+                participant.rendezvous_key.num_local_participants &&
+            !IsGlobalNcclConfig()) {
           nccl_unique_id = InvalidArgument(
-              "Multihost AllReduce on GPU requires a nccl_unique_id_callback "
-              "to be provided by the client.");
+              "If not local devices are taking part of a collective API on "
+              "GPU, the nccl_unique_id_callback must be provided by the "
+              "client.");
         } else {
           nccl_unique_id = absl::optional<std::string>();
         }
@@ -465,8 +474,8 @@ RendezvousNcclAllReduce::SubmitParticipantImpl(
           << " on device: " << participant.device_ordinal;
   XLA_CUDA_RETURN_IF_ERROR(ncclGroupStart());
   for (auto& buffer : participant.buffers) {
-    void* send_buffer = buffer.source_data.opaque();
-    void* recv_buffer = buffer.destination_data.opaque();
+    void* send_buffer = const_cast<void*>(buffer.source_data.opaque());
+    void* recv_buffer = const_cast<void*>(buffer.destination_data.opaque());
     absl::optional<ncclDataType_t> allreduce_datatype =
         DatatypeToNccl(buffer.primitive_type);
     CHECK(allreduce_datatype.has_value());
@@ -488,7 +497,7 @@ RendezvousNcclAllReduce::SubmitParticipantImpl(
           << participant.device_ordinal;
   VLOG(3) << "This thread done with all-reduce op.";
 
-  return std::make_pair(clique, primary);
+  return ParticipantImplOutput{primary, clique};
 }
 
 void RendezvousNcclAllReduce::CleanupImpl(std::shared_ptr<NcclClique> handle,
@@ -505,10 +514,39 @@ void RendezvousNcclAllReduce::CleanupImpl(std::shared_ptr<NcclClique> handle,
 // header.  In particular, this stores the thunk's cache of all NcclCliques it's
 // ever used.  This causes those cliques to stay alive as long as the thunk
 // lives, which is how we avoid expensive reinitialization of NCCL cliques.
-struct NcclAllReduceThunk::AuxData {
+struct NcclAllReduceConfig::AuxData {
   tensorflow::mutex mu;
   absl::flat_hash_set<std::shared_ptr<NcclClique>> cliques TF_GUARDED_BY(mu);
 };
+
+NcclAllReduceConfig::NcclAllReduceConfig(NcclAllReduceConfig&&) = default;
+NcclAllReduceConfig::~NcclAllReduceConfig() = default;
+
+NcclAllReduceConfig GetNcclAllReduceConfig(const HloInstruction* instr,
+                                           int64 replica_count) {
+  NcclAllReduceConfig config;
+  config.operand_count = instr->operands().size();
+  config.operand_element_type.reserve(config.operand_count);
+  for (int i = 0; i < config.operand_count; i++) {
+    config.operand_element_type.push_back(
+        instr->operand(i)->shape().element_type());
+  }
+  config.replica_count = replica_count;
+  config.replica_groups = instr->replica_groups();
+  auto reduction_kind = MatchReductionComputation(instr->to_apply());
+  CHECK(reduction_kind.has_value());
+  config.reduction_kind = reduction_kind.value();
+
+  if (instr->channel_id().has_value()) {
+    config.collective_op_kind = RendezvousKey::kCrossModule;
+    config.op_id = instr->channel_id().value();
+  } else {
+    config.collective_op_kind = RendezvousKey::kCrossReplica;
+    config.op_id = static_cast<int64>(instr->GetModule()->unique_id());
+  }
+  config.aux_data = std::make_unique<NcclAllReduceConfig::AuxData>();
+  return config;
+}
 
 /*static*/ bool NcclAllReduceThunk::CanImplement(const HloInstruction* crs) {
   auto operands_are_supported = [crs]() {
@@ -532,13 +570,12 @@ NcclAllReduceThunk::DevicesWithOpenNcclChannels() {
 }
 
 NcclAllReduceThunk::NcclAllReduceThunk(
-    int64 replica_count, std::vector<NcclAllReduceThunk::Buffer> buffers,
-    const HloInstruction* all_reduce)
-    : Thunk(Thunk::kNcclAllReduce, all_reduce),
-      replica_count_(replica_count),
-      buffers_(std::move(buffers)),
-      aux_data_(absl::make_unique<AuxData>()) {
-  CHECK_EQ(hlo_instruction()->operand_count(), buffers_.size());
+    ThunkInfo thunk_info, NcclAllReduceConfig&& config,
+    std::vector<NcclAllReduceThunk::Buffer> buffers)
+    : Thunk(Thunk::kNcclAllReduce, thunk_info),
+      config_(std::move(config)),
+      buffers_(std::move(buffers)) {
+  CHECK_EQ(config_.operand_count, buffers_.size());
 }
 
 // Figures out which devices (named by their replica-ids) are participating in
@@ -546,26 +583,24 @@ NcclAllReduceThunk::NcclAllReduceThunk(
 Status NcclAllReduceThunk::ExecuteOnStream(const ExecuteParams& params) {
   VLOG(1) << "Starting NcclAllReduceThunk.";
   auto op_profiler =
-      params.profiler->MakeScopedInstructionProfiler(hlo_instruction());
+      params.profiler->MakeScopedInstructionProfiler(profile_index());
 
-  auto* instr = Cast<HloAllReduceInstruction>(hlo_instruction());
   int64 local_device_ordinal = params.stream->parent()->device_ordinal();
-  GlobalDeviceId global_device_id;
-  if (params.gpu_global_device_ids) {
-    TF_RET_CHECK(0 <= local_device_ordinal &&
-                 local_device_ordinal < params.gpu_global_device_ids->size());
-    global_device_id = (*params.gpu_global_device_ids)[local_device_ordinal];
-  } else {
-    // No local -> global mapping was provided; assume the identity mapping.
-    global_device_id = GlobalDeviceId(local_device_ordinal);
-  }
-
+  TF_ASSIGN_OR_RETURN(GlobalDeviceId global_device_id,
+                      params.GetGlobalDeviceId());
   // Determines the set of global and local devices that are participating in
   // the same collective group as the caller.
   TF_ASSIGN_OR_RETURN(
       std::vector<int64> global_participating_replicas,
-      GetParticipatingReplicas(global_device_id, instr->replica_groups(),
-                               replica_count_, *params.device_assn));
+      GetParticipatingReplicas(global_device_id, config_.replica_groups,
+                               config_.replica_count, *params.device_assn));
+  if (IsGlobalNcclConfig() &&
+      global_participating_replicas.size() != config_.replica_count) {
+    return InvalidArgument(
+        "Partial replica groups are not allowed when using NCCL_COMM_ID "
+        "environment configuration.");
+  }
+
   std::vector<GlobalDeviceId> global_devices;
   std::vector<std::pair<GlobalDeviceId, int64>> local_devices;
   local_devices.reserve(global_participating_replicas.size());
@@ -588,10 +623,10 @@ Status NcclAllReduceThunk::ExecuteOnStream(const ExecuteParams& params) {
   }
   absl::c_sort(global_devices);
 
-  // Find or create the rendezvous for this collective operation.
-  RendezvousKey rendezvous_key = RendezvousKey::FromInstruction(
-      params.run_id, global_devices, local_devices.size(), hlo_instruction());
-
+  // Create the rendezvous for this collective operation.
+  RendezvousKey rendezvous_key(params.run_id, global_devices,
+                               local_devices.size(), config_.collective_op_kind,
+                               config_.op_id);
   if (VLOG_IS_ON(2)) {
     std::vector<std::string> local_participants;
     for (const auto& entry : local_devices) {
@@ -606,8 +641,8 @@ Status NcclAllReduceThunk::ExecuteOnStream(const ExecuteParams& params) {
             << ", local participants: "
             << absl::StrJoin(local_participants, ",");
   }
-  AllReduceParticipantData participant(rendezvous_key);
-  participant.device_ordinal = local_device_ordinal;
+  AllReduceParticipantData participant(rendezvous_key, local_device_ordinal,
+                                       params.stream);
   for (size_t i = 0; i < buffers_.size(); ++i) {
     const NcclAllReduceThunk::Buffer& buffer = buffers_[i];
     AllReduceParticipantData::Buffer pbuffer;
@@ -616,17 +651,12 @@ Status NcclAllReduceThunk::ExecuteOnStream(const ExecuteParams& params) {
         params.buffer_allocations->GetDeviceAddress(buffer.source_buffer);
     pbuffer.destination_data =
         params.buffer_allocations->GetDeviceAddress(buffer.destination_buffer);
-    pbuffer.primitive_type =
-        hlo_instruction()->operand(i)->shape().element_type();
+    pbuffer.primitive_type = config_.operand_element_type[i];
     participant.buffers.push_back(pbuffer);
   }
-  participant.stream = params.stream;
   participant.local_devices = std::move(local_devices);
   participant.nccl_unique_id_callback = params.nccl_unique_id_callback;
-  auto reduction_kind =
-      MatchReductionComputation(hlo_instruction()->to_apply());
-  CHECK(reduction_kind.has_value());
-  participant.reduction_kind = *reduction_kind;
+  participant.reduction_kind = config_.reduction_kind;
 
   auto rendezvous_factory = [](const RendezvousKey& k) {
     return absl::make_unique<RendezvousNcclAllReduce>(k);
@@ -643,13 +673,11 @@ Status NcclAllReduceThunk::ExecuteOnStream(const ExecuteParams& params) {
   // Keep the clique we used alive for as long as this Thunk lives.  Creating
   // new NCCL cliques is expensive, and this is how we avoid thrashing them.
   {
-    tensorflow::mutex_lock lock(aux_data_->mu);
-    aux_data_->cliques.insert(std::move(clique));
+    tensorflow::mutex_lock lock(config_.aux_data->mu);
+    config_.aux_data->cliques.insert(std::move(clique));
   }
   return Status::OK();
 }
-
-NcclAllReduceThunk::~NcclAllReduceThunk() {}
 
 }  // namespace gpu
 }  // namespace xla

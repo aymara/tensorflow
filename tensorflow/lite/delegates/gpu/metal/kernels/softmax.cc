@@ -20,20 +20,20 @@ limitations under the License.
 #include <utility>
 #include <vector>
 
+#include "tensorflow/lite/delegates/gpu/common/gpu_info.h"
 #include "tensorflow/lite/delegates/gpu/common/model.h"
 #include "tensorflow/lite/delegates/gpu/common/shape.h"
 #include "tensorflow/lite/delegates/gpu/common/types.h"
 #include "tensorflow/lite/delegates/gpu/common/util.h"
 #include "tensorflow/lite/delegates/gpu/metal/compute_task_descriptor.h"
-#include "tensorflow/lite/delegates/gpu/metal/environment.h"
 #include "tensorflow/lite/delegates/gpu/metal/runtime_options.h"
 
 namespace tflite {
 namespace gpu {
 namespace metal {
 namespace {
-std::string GetSoftmax1x1Code(const DeviceInfo& device_info) {
-  const std::string barrier = device_info.IsWaveSizeEqualTo32()
+std::string GetSoftmax1x1Code(const GpuInfo& gpu_info) {
+  const std::string barrier = gpu_info.IsWaveSizeEqualTo32()
                                   ? "SIMDGROUP_BARRIER"
                                   : "threadgroup_barrier";
   std::string code = R"(
@@ -169,8 +169,8 @@ std::vector<ComputeTaskDescriptorPtr> Softmax(int id, ValueId input_id,
   desc->resize_function = [output_id](const std::map<ValueId, BHWC>& buffers) {
     uint3 groups_size{8, 4, 1};
     const auto& dimension = buffers.find(output_id)->second;
-    uint3 groups_count{IntegralDivideRoundUp(dimension.w, groups_size.x),
-                       IntegralDivideRoundUp(dimension.h, groups_size.y), 1};
+    uint3 groups_count{DivideRoundUp(dimension.w, groups_size.x),
+                       DivideRoundUp(dimension.h, groups_size.y), 1};
     return std::make_pair(groups_size, groups_count);
   };
 
@@ -179,12 +179,12 @@ std::vector<ComputeTaskDescriptorPtr> Softmax(int id, ValueId input_id,
 
 std::vector<ComputeTaskDescriptorPtr> Softmax1x1(int id, ValueId input_id,
                                                  ValueId output_id,
-                                                 const DeviceInfo& device_info,
+                                                 const GpuInfo& gpu_info,
                                                  int channels_count) {
   auto desc = std::make_shared<ComputeTaskDescriptor>();
   desc->id = id;
   desc->is_linkable = false;
-  desc->shader_source = GetSoftmax1x1Code(device_info);
+  desc->shader_source = GetSoftmax1x1Code(gpu_info);
 
   desc->input_buffers = {
       {input_id, "device FLT4* const src_buffer"},
@@ -198,13 +198,13 @@ std::vector<ComputeTaskDescriptorPtr> Softmax1x1(int id, ValueId input_id,
   desc->uniform_buffers = {
       {"constant uniforms& params",
        [channels_count](const std::map<ValueId, BHWC>& buffers) {
-         const int src_depth = IntegralDivideRoundUp(channels_count, 4);
+         const int src_depth = DivideRoundUp(channels_count, 4);
          struct uniforms {
            int4 size;
            float4 mask;
          };
          uniforms params;
-         params.size = {src_depth, IntegralDivideRoundUp(src_depth, 32), 1, 1};
+         params.size = {src_depth, DivideRoundUp(src_depth, 32), 1, 1};
          params.mask = {0.0f, 0.0f, 0.0f, 0.0f};
          const int reminder = channels_count % 4 == 0 ? 4 : channels_count % 4;
          for (int i = 0; i < reminder; ++i) {

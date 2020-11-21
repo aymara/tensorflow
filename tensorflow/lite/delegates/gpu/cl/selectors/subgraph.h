@@ -20,8 +20,8 @@ limitations under the License.
 #include <vector>
 
 #include "tensorflow/lite/delegates/gpu/cl/kernels/gpu_operation.h"
-#include "tensorflow/lite/delegates/gpu/cl/tensor_type.h"
 #include "tensorflow/lite/delegates/gpu/common/model.h"
+#include "tensorflow/lite/delegates/gpu/common/task/tensor_desc.h"
 
 namespace tflite {
 namespace gpu {
@@ -43,8 +43,7 @@ struct GPUOperationsSubgraph {
 };
 
 std::unique_ptr<GPUOperation>* InitSingleOpSubgraph(
-    const std::vector<Value<TensorRef<BHWC>>*>& inputs,
-    const std::vector<Value<TensorRef<BHWC>>*>& outputs,
+    const std::vector<Value*>& inputs, const std::vector<Value*>& outputs,
     GPUOperationsSubgraph* gpu_subgraph);
 
 }  // namespace cl

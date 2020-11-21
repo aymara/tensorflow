@@ -70,6 +70,9 @@ final class NativeInterpreterWrapper implements AutoCloseable {
     this.errorHandle = errorHandle;
     this.modelHandle = modelHandle;
     this.interpreterHandle = createInterpreter(modelHandle, errorHandle, options.numThreads);
+    if (options.allowCancellation != null && options.allowCancellation) {
+      this.cancellationFlagHandle = createCancellationFlag(interpreterHandle);
+    }
     this.inputTensors = new Tensor[getInputCount(interpreterHandle)];
     this.outputTensors = new Tensor[getOutputCount(interpreterHandle)];
     if (options.allowFp16PrecisionForFp32 != null) {
@@ -80,6 +83,10 @@ final class NativeInterpreterWrapper implements AutoCloseable {
       allowBufferHandleOutput(interpreterHandle, options.allowBufferHandleOutput.booleanValue());
     }
     applyDelegates(options);
+    if (options.useXNNPACK != null) {
+      useXNNPACK(
+          interpreterHandle, errorHandle, options.useXNNPACK.booleanValue(), options.numThreads);
+    }
     allocateTensors(interpreterHandle, errorHandle);
     this.isMemoryAllocated = true;
   }
@@ -101,9 +108,11 @@ final class NativeInterpreterWrapper implements AutoCloseable {
       }
     }
     delete(errorHandle, modelHandle, interpreterHandle);
+    deleteCancellationFlag(cancellationFlagHandle);
     errorHandle = 0;
     modelHandle = 0;
     interpreterHandle = 0;
+    cancellationFlagHandle = 0;
     modelByteBuffer = null;
     inputsIndexes = null;
     outputsIndexes = null;
@@ -174,7 +183,14 @@ final class NativeInterpreterWrapper implements AutoCloseable {
 
   /** Resizes dimensions of a specific input. */
   void resizeInput(int idx, int[] dims) {
-    if (resizeInput(interpreterHandle, errorHandle, idx, dims)) {
+    resizeInput(idx, dims, false);
+  }
+
+  /** Resizes dimensions of a specific input. */
+  void resizeInput(int idx, int[] dims, boolean strict) {
+    if (resizeInput(interpreterHandle, errorHandle, idx, dims, strict)) {
+      // Tensor allocation is deferred until either an explicit `allocateTensors()` call or
+      // `invoke()` avoiding redundant allocations if multiple tensors are simultaneosly resized.
       isMemoryAllocated = false;
       if (inputTensors[idx] != null) {
         inputTensors[idx].refreshShape();
@@ -183,11 +199,24 @@ final class NativeInterpreterWrapper implements AutoCloseable {
   }
 
   private static native boolean resizeInput(
-      long interpreterHandle, long errorHandle, int inputIdx, int[] dims);
+      long interpreterHandle, long errorHandle, int inputIdx, int[] dims, boolean strict);
 
-  void setUseNNAPI(boolean useNNAPI) {
-    useNNAPI(interpreterHandle, useNNAPI);
+  /** Triggers explicit allocation of tensors. */
+  void allocateTensors() {
+    if (isMemoryAllocated) {
+      return;
+    }
+
+    isMemoryAllocated = true;
+    allocateTensors(interpreterHandle, errorHandle);
+    for (int i = 0; i < outputTensors.length; ++i) {
+      if (outputTensors[i] != null) {
+        outputTensors[i].refreshShape();
+      }
+    }
   }
+
+  private static native long allocateTensors(long interpreterHandle, long errorHandle);
 
   void setNumThreads(int numThreads) {
     numThreads(interpreterHandle, numThreads);
@@ -300,6 +329,26 @@ final class NativeInterpreterWrapper implements AutoCloseable {
     return outputTensor;
   }
 
+  /** Gets the number of ops in the execution plan. */
+  int getExecutionPlanLength() {
+    return getExecutionPlanLength(interpreterHandle);
+  }
+
+  /**
+   * Sets internal cancellation flag. If it's true, the interpreter will try to interrupt any
+   * invocation between ops.
+   */
+  void setCancelled(boolean value) {
+    if (cancellationFlagHandle == 0) {
+      throw new IllegalStateException(
+          "Cannot cancel the inference. Have you called Interpreter.Options.setCancellable?");
+    }
+    setCancelled(interpreterHandle, cancellationFlagHandle, value);
+  }
+
+  private static native void setCancelled(
+      long interpreterHandle, long cancellationFlagHandle, boolean value);
+
   private void applyDelegates(Interpreter.Options options) {
     // First apply the flex delegate if necessary. This ensures the graph is fully resolved before
     // applying other delegates.
@@ -364,6 +413,8 @@ final class NativeInterpreterWrapper implements AutoCloseable {
 
   private long modelHandle;
 
+  private long cancellationFlagHandle = 0;
+
   private long inferenceDurationNanoseconds = -1;
 
   private ByteBuffer modelByteBuffer;
@@ -385,8 +436,6 @@ final class NativeInterpreterWrapper implements AutoCloseable {
   // List of owned delegates that must be closed when the interpreter is closed.
   private final List<AutoCloseable> ownedDelegates = new ArrayList<>();
 
-  private static native long allocateTensors(long interpreterHandle, long errorHandle);
-
   private static native boolean hasUnresolvedFlexOp(long interpreterHandle);
 
   private static native int getInputTensorIndex(long interpreterHandle, int inputIdx);
@@ -397,17 +446,20 @@ final class NativeInterpreterWrapper implements AutoCloseable {
 
   private static native int getOutputCount(long interpreterHandle);
 
+  private static native int getExecutionPlanLength(long interpreterHandle);
+
   private static native String[] getInputNames(long interpreterHandle);
 
   private static native String[] getOutputNames(long interpreterHandle);
-
-  private static native void useNNAPI(long interpreterHandle, boolean state);
 
   private static native void numThreads(long interpreterHandle, int numThreads);
 
   private static native void allowFp16PrecisionForFp32(long interpreterHandle, boolean allow);
 
   private static native void allowBufferHandleOutput(long interpreterHandle, boolean allow);
+
+  private static native void useXNNPACK(
+      long interpreterHandle, long errorHandle, boolean state, int numThreads);
 
   private static native long createErrorReporter(int size);
 
@@ -421,6 +473,10 @@ final class NativeInterpreterWrapper implements AutoCloseable {
       long interpreterHandle, long errorHandle, long delegateHandle);
 
   private static native void resetVariableTensors(long interpreterHandle, long errorHandle);
+
+  private static native long createCancellationFlag(long interpreterHandle);
+
+  private static native long deleteCancellationFlag(long cancellationFlagHandle);
 
   private static native void delete(long errorHandle, long modelHandle, long interpreterHandle);
 }

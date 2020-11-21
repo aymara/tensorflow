@@ -43,7 +43,7 @@ namespace tf_executor {
 namespace {
 
 // IslandType is an enum representing if an island is the island (parent)
-// merging another island or is the island (child) being being merged.
+// merging another island or is the island (child) being merged.
 enum IslandType { kParentIsland, kChildIsland };
 
 // IslandResult is a helper struct holding an islands result and associated
@@ -57,7 +57,7 @@ struct IslandResult {
 };
 
 struct ExecutorIslandCoarsening
-    : public FunctionPass<ExecutorIslandCoarsening> {
+    : public PassWrapper<ExecutorIslandCoarsening, FunctionPass> {
   void runOnFunction() override;
 };
 
@@ -185,8 +185,8 @@ IslandOp CreateNewIsland(IslandOp parent, IslandOp child,
 
   Operation* old_island = insert_position == kParentIsland ? parent : child;
   OpBuilder builder(old_island);
-  auto new_island = builder.create<IslandOp>(
-      old_island->getLoc(), result_types, operands, ArrayRef<NamedAttribute>{});
+  auto new_island =
+      builder.create<IslandOp>(old_island->getLoc(), result_types, operands);
   new_island.body().push_back(new Block);
   return new_island;
 }
@@ -346,7 +346,7 @@ void ExecutorIslandCoarsening::runOnFunction() {
 
 }  // namespace
 
-std::unique_ptr<OpPassBase<FuncOp>> CreateTFExecutorIslandCoarseningPass() {
+std::unique_ptr<OperationPass<FuncOp>> CreateTFExecutorIslandCoarseningPass() {
   return std::make_unique<ExecutorIslandCoarsening>();
 }
 

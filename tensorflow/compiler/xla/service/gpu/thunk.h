@@ -68,17 +68,24 @@ class Thunk {
     kWhile,
   };
 
+  struct ThunkInfo {
+    absl::optional<int64> profile_index;
+    std::string profile_annotation;
+  };
+
   // The hlo_instruction argument is meant to be the instruction this thunk was
   // generated from, but Thunk never uses this argument other than to save it
   // to Thunk::hlo_instruction, so it can be null.
-  explicit Thunk(Kind kind, const HloInstruction* hlo_instruction)
-      : kind_(kind), hlo_instruction_(hlo_instruction) {}
+  explicit Thunk(Kind kind, ThunkInfo thunk_info)
+      : kind_(kind),
+        profile_index_(thunk_info.profile_index),
+        profile_annotation_(thunk_info.profile_annotation) {}
   virtual ~Thunk() {}
   Thunk(const Thunk&) = delete;
   Thunk& operator=(const Thunk&) = delete;
 
   Kind kind() const { return kind_; }
-  const HloInstruction* hlo_instruction() const { return hlo_instruction_; }
+  string profile_annotation() const { return profile_annotation_; }
 
   // Prepares the thunk for execution on the given StreamExecutor.
   //
@@ -101,6 +108,8 @@ class Thunk {
     std::vector<std::function<void()>>* deferred_host_callbacks;  // never null
     const std::vector<GlobalDeviceId>* gpu_global_device_ids;     // may be null
     const NcclUniqueIdCallback* nccl_unique_id_callback;          // may be null
+
+    StatusOr<GlobalDeviceId> GetGlobalDeviceId() const;
   };
 
   // Execute the kernel for the thunk on the given stream. This method must be
@@ -111,9 +120,7 @@ class Thunk {
   virtual Status ExecuteOnStream(const ExecuteParams& params) = 0;
 
  protected:
-  const HloModuleConfig& GetModuleConfig() const {
-    return hlo_instruction()->GetModule()->config();
-  }
+  absl::optional<int64> profile_index() const { return profile_index_; }
 
   // Safely copies the given buffer to the GPU, deleting it on the host only
   // after the copy has completed.
@@ -129,7 +136,8 @@ class Thunk {
 
  private:
   Kind kind_;
-  const HloInstruction* hlo_instruction_;
+  absl::optional<int64> profile_index_;
+  std::string profile_annotation_;
 };
 
 // A sequence of thunks.

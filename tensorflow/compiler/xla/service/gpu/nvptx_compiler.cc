@@ -96,7 +96,7 @@ string GetLibdeviceDir(const HloModuleConfig& hlo_module_config) {
       "uses routines from libdevice.",
       hlo_module_config);
 
-  // GetCudaRootCandidates always includes ".", but but if everything fails, we
+  // GetCudaRootCandidates always includes ".", but if everything fails, we
   // return it anyway.  Better than returning the empty string.
   return ".";
 }
@@ -141,6 +141,7 @@ Status NVPTXCompiler::OptimizeHloConvolutionCanonicalization(
     // bitcast. This leads to having to linearize and then delinearize the
     // index.
     options.set_replace_transpose_with_bitcast(false);
+    options.set_enable_conv_operand_swap(false);
     options.set_cudnn_batchnorm_forward_training_metadata(
         kCudnnBatchNormForwardTrainingCallTarget);
     pass.AddPass<AlgebraicSimplifier>(options);
@@ -197,6 +198,42 @@ absl::optional<bool> CanShareBufferHint(const HloInstruction* user,
   return absl::nullopt;
 }
 
+// Try to load ptx from files defined in the FLAGS. If successful, return true.
+bool MaybeLoadPtxFromFile(const HloModule* module, std::string* ptx) {
+  // If the xla_gpu_ptx_file options is set, be explicit when a file is used
+  // and warn when a file is not used to ease catching typo in filename.
+  std::string prefix = xla::FilenameFor(*module, "", *ptx);
+  std::string matched_filename;
+  for (const string& full_filename :
+       module->config().debug_options().xla_gpu_ptx_file()) {
+    // To ease comparing many PTX versions, accept different suffixes then
+    // the original filename.
+    auto filename = tensorflow::io::Basename(full_filename);
+    if (absl::StartsWith(filename, prefix)) {
+      matched_filename = full_filename;
+      VLOG(0) << "RunBackend() - Will load PTX from file: " << full_filename;
+      break;
+    }
+  }
+  if (module->config().debug_options().xla_gpu_ptx_file().size() > 0 &&
+      matched_filename.empty()) {
+    VLOG(0) << "RunBackend() - For module with prefix '" << prefix
+            << "', we did not found a PTX file to load.";
+  }
+
+  if (!matched_filename.empty()) {
+    std::ifstream ifs(matched_filename, std::ifstream::in);
+    *ptx = std::string(std::istreambuf_iterator<char>(ifs),
+                       std::istreambuf_iterator<char>());
+    CHECK(!ptx->empty()) << "Empty or non existing PTX file: "
+                         << matched_filename;
+    return true;
+  }
+  return false;
+}
+
+}  // namespace
+
 // Prints a warning if the ptx->sass JIT in the driver has known bugs.
 //
 // Using such a driver only a problem if we fail to use ptxas to compile our ptx
@@ -236,42 +273,6 @@ void WarnIfBadDriverJITVersion() {
     }
   });
 }
-
-// Try to load ptx from files defined in the FLAGS. If successful, return true.
-bool MaybeLoadPtxFromFile(const HloModule* module, std::string* ptx) {
-  // If the xla_gpu_ptx_file options is set, be explicit when a file is used
-  // and warn when a file is not used to ease catching typo in filename.
-  std::string prefix = xla::FilenameFor(*module, "", *ptx);
-  std::string matched_filename;
-  for (const string full_filename :
-       module->config().debug_options().xla_gpu_ptx_file()) {
-    // To ease comparing many PTX versions, accept different suffixes then
-    // the original filename.
-    auto filename = tensorflow::io::Basename(full_filename);
-    if (absl::StartsWith(filename, prefix)) {
-      matched_filename = full_filename;
-      VLOG(0) << "RunBackend() - Will load PTX from file: " << full_filename;
-      break;
-    }
-  }
-  if (module->config().debug_options().xla_gpu_ptx_file().size() > 0 &&
-      matched_filename.empty()) {
-    VLOG(0) << "RunBackend() - For module with prefix '" << prefix
-            << "', we did not found a PTX file to load.";
-  }
-
-  if (!matched_filename.empty()) {
-    std::ifstream ifs(matched_filename, std::ifstream::in);
-    *ptx = std::string(std::istreambuf_iterator<char>(ifs),
-                       std::istreambuf_iterator<char>());
-    CHECK(!ptx->empty()) << "Empty or non existing PTX file: "
-                         << matched_filename;
-    return true;
-  }
-  return false;
-}
-
-}  // namespace
 
 NVPTXCompiler::NVPTXCompiler()
     : GpuCompiler(stream_executor::cuda::kCudaPlatformId, nvptx::kTargetTriple,
@@ -382,9 +383,21 @@ std::vector<uint8> NVPTXCompiler::CompileGpuAsmOrGetCachedResult(
           VLOG(2) << "Compiled PTX size:" << ptx.size()
                   << " CUBIN size: " << cache_value->cubin_data.size();
         } else {
-          bool log_warning = true;
           if (maybe_cubin.status().code() ==
               tensorflow::error::Code::NOT_FOUND) {
+            if (!hlo_module_config.debug_options()
+                     .xla_gpu_unsafe_fallback_to_driver_on_ptxas_not_found()) {
+              PrintCantFindCudaMessage(
+                  "Can't find ptxas binary in ${CUDA_DIR}/bin.  Custom ptxas "
+                  "location can be specified using $PATH.",
+                  hlo_module_config);
+              LOG(FATAL)
+                  << "Can't find ptxas binary.  You can pass the flag "
+                     "--xla_gpu_unsafe_fallback_to_driver_on_ptxas_not_found "
+                     "to use the GPU driver for compiling ptx instead. However "
+                     "this option is discouraged and can lead to increased "
+                     "memory consumptions and other subtle runtime issues.";
+            }
             // Missing ptxas is expected in some environments where CUDA SDK
             // binaries are not available. We don't want to spam logs with
             // identical warnings in this case.
@@ -392,15 +405,25 @@ std::vector<uint8> NVPTXCompiler::CompileGpuAsmOrGetCachedResult(
             // TODO(jlebar): we should implement a LOG_FIRST_N and LOG_EVERY_N
             // for more general usage.
             static std::atomic<bool> warning_done(false);
-            log_warning = !warning_done.exchange(true);
-          }
-          if (log_warning) {
-            PrintCantFindCudaMessage(
-                "Can't find ptxas binary in ${CUDA_DIR}/bin.  Will back to the "
-                "GPU driver for PTX -> sass compilation.  This is OK so long "
-                "as you don't see a warning below about an out-of-date driver "
-                "version. Custom ptxas location can be specified using $PATH.",
-                hlo_module_config);
+            bool log_warning = !warning_done.exchange(true);
+            if (log_warning) {
+              PrintCantFindCudaMessage(
+                  "Can't find ptxas binary in ${CUDA_DIR}/bin.  Will back to "
+                  "the GPU driver for PTX -> sass compilation.  This is OK so "
+                  "long as you don't see a warning below about an out-of-date "
+                  "driver version. Custom ptxas location can be specified "
+                  "using $PATH.",
+                  hlo_module_config);
+            }
+          } else if (maybe_cubin.status().code() !=
+                     tensorflow::error::Code::UNIMPLEMENTED) {
+            // If unimplemented is returned, we fallback to the driver.
+            LOG(FATAL) << "ptxas returned an error during compilation of ptx "
+                          "to sass: '"
+                       << maybe_cubin.status() << "'  "
+                       << "If the error message indicates that a file could "
+                          "not be written, please verify that sufficient "
+                          "filesystem space is provided.";
           }
 
           // We're going to use the driver to JIT our PTX->SASS, so warn if

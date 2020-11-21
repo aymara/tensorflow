@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 # ==============================================================================
-"""Keras categorical preprocessing layers."""
+"""Keras reduction layer."""
 # pylint: disable=g-classes-have-attributes
 
 from __future__ import absolute_import
@@ -75,7 +75,6 @@ class Reduction(Layer):
     # We temporarily turn off autocasting, as it does not apply to named call
     # kwargs.
     super(Reduction, self).__init__(**kwargs)
-    self._supports_ragged_inputs = True
 
   def call(self, inputs, weights=None):
     # If we are not weighting the inputs we can immediately reduce the data

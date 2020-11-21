@@ -109,7 +109,7 @@ class CategoricalOp : public XlaOpKernel {
                                   /*axis=*/class_dimension);
     } else {
       argmax = xla::ArgMax(softmax_entries, xla_output_type,
-                           /*axis=*/class_dimension);
+                           /*axis=*/class_dimension, /*stable=*/true);
     }
 
     if (num_samples == 1) {
@@ -186,7 +186,7 @@ class StatelessCategoricalOp : public CategoricalOp {
 
 REGISTER_XLA_OP(Name("StatelessMultinomial")
                     .CompileTimeConstantInput("num_samples")
-                    .TypeConstraint("T", {DT_FLOAT, DT_BFLOAT16})
+                    .TypeConstraint("T", {DT_DOUBLE, DT_FLOAT, DT_BFLOAT16})
                     .TypeConstraint("Tseed", DT_INT32),
                 StatelessCategoricalOp);
 

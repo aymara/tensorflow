@@ -83,15 +83,16 @@ class TensorBoard(callbacks.TensorBoard):
       embeddings_layer_names: a list of names of layers to keep eye on. If None
         or empty list all the embedding layer will be watched.
       embeddings_metadata: a dictionary which maps layer name to a file name in
-        which metadata for this embedding layer is saved. See the
-          [details](https://www.tensorflow.org/how_tos/embedding_viz/#metadata_optional)
+        which metadata for this embedding layer is saved.
+          [Here are details](
+            https://www.tensorflow.org/how_tos/embedding_viz/#metadata_optional)
             about metadata files format. In case if the same metadata file is
             used for all embedding layers, string can be passed.
       embeddings_data: data to be embedded at layers specified in
         `embeddings_layer_names`. Numpy array (if the model has a single input)
-        or list of Numpy arrays (if the model has multiple inputs). Learn [more
-        about
-            embeddings](https://www.tensorflow.org/programmers_guide/embedding)
+        or list of Numpy arrays (if the model has multiple inputs). Learn more
+        about embeddings [in this guide](
+          https://www.tensorflow.org/programmers_guide/embedding).
       update_freq: `'batch'` or `'epoch'` or integer. When using `'batch'`,
         writes the losses and metrics to TensorBoard after each batch. The same
         applies for `'epoch'`. If using an integer, let's say `1000`, the
@@ -166,10 +167,10 @@ class TensorBoard(callbacks.TensorBoard):
   def _init_writer(self, model):
     """Sets file writer."""
     if context.executing_eagerly():
-      self.writer = summary_ops_v2.create_file_writer(self.log_dir)
+      self.writer = summary_ops_v2.create_file_writer_v2(self.log_dir)
       if not model.run_eagerly and self.write_graph:
         with self.writer.as_default():
-          summary_ops_v2.graph(K.get_graph(), step=0)
+          summary_ops_v2.graph(K.get_graph())
     elif self.write_graph:
       self.writer = tf_summary.FileWriter(self.log_dir, K.get_graph())
     else:
@@ -244,8 +245,8 @@ class TensorBoard(callbacks.TensorBoard):
     # visualize embeddings.
     if self.embeddings_freq and self.embeddings_data is not None:
       # Avoid circular dependency.
-      from tensorflow.python.keras.engine import training_utils  # pylint: disable=g-import-not-at-top
-      self.embeddings_data = training_utils.standardize_input_data(
+      from tensorflow.python.keras.engine import training_utils_v1  # pylint: disable=g-import-not-at-top
+      self.embeddings_data = training_utils_v1.standardize_input_data(
           self.embeddings_data, model.input_names)
 
       # If embedding_layer_names are not provided, get all of the embedding
@@ -326,7 +327,7 @@ class TensorBoard(callbacks.TensorBoard):
     logs = logs or {}
     if context.executing_eagerly():
       # use v2 summary ops
-      with self.writer.as_default(), summary_ops_v2.always_record_summaries():
+      with self.writer.as_default(), summary_ops_v2.record_if(True):
         for name, value in logs.items():
           if isinstance(value, np.ndarray):
             value = value.item()
